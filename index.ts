@@ -9,20 +9,25 @@
  *
  * Usage:
  *   pi install npm:@netandreus/pi-cursor-provider
- *   # Then /model cursor/<model-id>, e.g. /model cursor/sonnet-4.5-thinking
+ *   # Then /model cursor/<model-id>, e.g. /model cursor/claude-opus-4-8
  *
  * Configuration env vars:
  *   CURSOR_AGENT_PATH   Path to the Cursor Agent CLI binary (default: "agent")
  *   CURSOR_API_KEY      API key for Cursor (used by the agent subprocess if set)
+ *   CURSOR_AGENT_FORCE  Set to "0" to disable --force (Run Everything) in print mode
  */
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type {
   Api,
   AssistantMessage,
   AssistantMessageEventStream,
   Context,
+  ImageContent,
   Model,
   SimpleStreamOptions,
   TextContent,
@@ -42,223 +47,263 @@ interface CursorModelDef {
   maxTokens: number;
 }
 
+interface ParsedCursorModelId {
+  family: string;
+  effort?: string;
+  thinking: boolean;
+  fast: boolean;
+}
+
+type ReasoningLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+const EFFORT_SUFFIXES = [
+  "extra-high",
+  "xhigh",
+  "minimal",
+  "medium",
+  "none",
+  "low",
+  "high",
+  "max",
+] as const;
+
+/** Literal apiKey so Pi 0.77+ shows models without CURSOR_API_KEY. Never sent on the wire. */
+const CURSOR_CLI_PLACEHOLDER_API_KEY = "cursor-cli";
+
 /**
  * Static fallback list. Used when `agent models` fails or times out, and as
  * an attribute lookup table for models discovered dynamically.
  *
- * Source: `agent models` output (Cursor Agent CLI v2026.02.13-41ac335).
+ * One default variant per family. Source: `agent models` (Cursor Agent CLI
+ * v2026.08.11-e8db854).
  */
 const STATIC_MODELS: CursorModelDef[] = [
-  // Auto
   { id: "auto", name: "Auto", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  // Composer
-  { id: "composer-1.5", name: "Composer 1.5", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  { id: "composer-1", name: "Composer 1", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  // Claude Opus
-  { id: "opus-4.6-thinking", name: "Claude 4.6 Opus (Thinking)", reasoning: true, contextWindow: 200000, maxTokens: 32000 },
-  { id: "opus-4.6", name: "Claude 4.6 Opus", reasoning: false, contextWindow: 200000, maxTokens: 32000 },
-  { id: "opus-4.5-thinking", name: "Claude 4.5 Opus (Thinking)", reasoning: true, contextWindow: 200000, maxTokens: 32000 },
-  { id: "opus-4.5", name: "Claude 4.5 Opus", reasoning: false, contextWindow: 200000, maxTokens: 32000 },
-  // Claude Sonnet
-  { id: "sonnet-4.6-thinking", name: "Claude 4.6 Sonnet (Thinking)", reasoning: true, contextWindow: 200000, maxTokens: 32000 },
-  { id: "sonnet-4.6", name: "Claude 4.6 Sonnet", reasoning: false, contextWindow: 200000, maxTokens: 32000 },
-  { id: "sonnet-4.5-thinking", name: "Claude 4.5 Sonnet (Thinking)", reasoning: true, contextWindow: 200000, maxTokens: 32000 },
-  { id: "sonnet-4.5", name: "Claude 4.5 Sonnet", reasoning: false, contextWindow: 200000, maxTokens: 32000 },
-  // GPT-5 series
-  { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.3-codex-low", name: "GPT-5.3 Codex Low", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.3-codex-high", name: "GPT-5.3 Codex High", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.3-codex-xhigh", name: "GPT-5.3 Codex Extra High", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.3-codex-fast", name: "GPT-5.3 Codex Fast", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.3-codex-low-fast", name: "GPT-5.3 Codex Low Fast", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.3-codex-high-fast", name: "GPT-5.3 Codex High Fast", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.3-codex-xhigh-fast", name: "GPT-5.3 Codex Extra High Fast", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.2", name: "GPT-5.2", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.2-high", name: "GPT-5.2 High", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.2-codex", name: "GPT-5.2 Codex", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.2-codex-high", name: "GPT-5.2 Codex High", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.2-codex-low", name: "GPT-5.2 Codex Low", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.2-codex-xhigh", name: "GPT-5.2 Codex Extra High", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.2-codex-fast", name: "GPT-5.2 Codex Fast", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.2-codex-high-fast", name: "GPT-5.2 Codex High Fast", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.2-codex-low-fast", name: "GPT-5.2 Codex Low Fast", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.2-codex-xhigh-fast", name: "GPT-5.2 Codex Extra High Fast", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.1-high", name: "GPT-5.1 High", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.1-codex-max", name: "GPT-5.1 Codex Max", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.1-codex-max-high", name: "GPT-5.1 Codex Max High", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.1-codex-mini", name: "GPT-5.1 Codex Mini", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  // Gemini
-  { id: "gemini-3-pro", name: "Gemini 3 Pro", reasoning: false, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "composer-2.5", name: "Composer 2.5", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
+  { id: "claude-opus-4-8-medium", name: "Claude Opus 4.8 1M Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "claude-opus-5-medium", name: "Claude Opus 5 1M Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "claude-sonnet-5-medium", name: "Claude Sonnet 5 1M Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "claude-fable-5-medium", name: "Claude Fable 5 1M Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "claude-opus-4-7-medium", name: "Claude Opus 4.7 1M Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "claude-4.6-opus-high", name: "Claude Opus 4.6 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "claude-4.6-sonnet-medium", name: "Claude Sonnet 4.6 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "claude-4.5-opus-high", name: "Claude Opus 4.5", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
+  { id: "claude-4.5-sonnet", name: "Claude Sonnet 4.5", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
+  { id: "claude-4-sonnet", name: "Claude Sonnet 4", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
+  { id: "gpt-5.6-sol-medium", name: "GPT-5.6 Sol 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "gpt-5.6-luna-medium", name: "GPT-5.6 Luna 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "gpt-5.6-terra-medium", name: "GPT-5.6 Terra 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "gpt-5.5-medium", name: "GPT-5.5 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "gpt-5.4-medium", name: "GPT-5.4 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "gpt-5.4-mini-medium", name: "GPT-5.4 Mini", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
+  { id: "gpt-5.4-nano-medium", name: "GPT-5.4 Nano", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
+  { id: "gpt-5.3-codex", name: "Codex 5.3", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
+  { id: "gpt-5.2", name: "GPT-5.2", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
+  { id: "gpt-5.1", name: "GPT-5.1", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
+  { id: "gpt-5-mini", name: "GPT-5 Mini", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
+  { id: "cursor-grok-4.6-medium", name: "Cursor Grok 4.6 Medium", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
+  { id: "cursor-grok-4.5-medium", name: "Cursor Grok 4.5 Medium", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
+  { id: "gemini-3.7-flash-medium", name: "Gemini 3.7 Flash Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "gemini-3.6-flash-medium", name: "Gemini 3.6 Flash Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash", reasoning: false, contextWindow: 1000000, maxTokens: 65536 },
+  { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro", reasoning: false, contextWindow: 1000000, maxTokens: 65536 },
   { id: "gemini-3-flash", name: "Gemini 3 Flash", reasoning: false, contextWindow: 1000000, maxTokens: 65536 },
-  // Grok
-  { id: "grok", name: "Grok", reasoning: false, contextWindow: 131072, maxTokens: 32768 },
+  { id: "glm-5.2-high", name: "GLM 5.2", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
+  { id: "kimi-k3-high", name: "Kimi K3 High", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
+  { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
 ];
 
-/** Fast lookup: static model id → definition */
-const STATIC_MODELS_MAP = new Map<string, CursorModelDef>(
-  STATIC_MODELS.map((m) => [m.id, m]),
-);
-
-// ---------------------------------------------------------------------------
-// Canonical model ID mapping
-// Maps canonical IDs (e.g. claude-sonnet-4-5) to CLI model IDs. When Pi
-// provides a reasoning/thinking level, the corresponding variant is used.
-// ---------------------------------------------------------------------------
-
-type ReasoningLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
-
-interface ModelVariants {
-  default: string;
-  minimal?: string;
-  low?: string;
-  medium?: string;
-  high?: string;
-  xhigh?: string;
-}
-
-const MODEL_MAP: Record<string, ModelVariants> = {
-  "claude-sonnet-4-5": {
-    default: "sonnet-4.5",
-    minimal: "sonnet-4.5-thinking",
-    low: "sonnet-4.5-thinking",
-    medium: "sonnet-4.5-thinking",
-    high: "sonnet-4.5-thinking",
-    xhigh: "sonnet-4.5-thinking",
-  },
-  "claude-sonnet-4-6": {
-    default: "sonnet-4.6",
-    minimal: "sonnet-4.6-thinking",
-    low: "sonnet-4.6-thinking",
-    medium: "sonnet-4.6-thinking",
-    high: "sonnet-4.6-thinking",
-    xhigh: "sonnet-4.6-thinking",
-  },
-  "claude-opus-4-5": {
-    default: "opus-4.5",
-    minimal: "opus-4.5-thinking",
-    low: "opus-4.5-thinking",
-    medium: "opus-4.5-thinking",
-    high: "opus-4.5-thinking",
-    xhigh: "opus-4.5-thinking",
-  },
-  "claude-opus-4-6": {
-    default: "opus-4.6",
-    minimal: "opus-4.6-thinking",
-    low: "opus-4.6-thinking",
-    medium: "opus-4.6-thinking",
-    high: "opus-4.6-thinking",
-    xhigh: "opus-4.6-thinking",
-  },
-  "gpt-5.2": {
-    default: "gpt-5.2",
-    high: "gpt-5.2-high",
-    xhigh: "gpt-5.2-high",
-  },
-  "gpt-5.2-codex": {
-    default: "gpt-5.2-codex",
-    minimal: "gpt-5.2-codex-low",
-    low: "gpt-5.2-codex-low",
-    high: "gpt-5.2-codex-high",
-    xhigh: "gpt-5.2-codex-xhigh",
-  },
-  "gpt-5.2-codex-fast": {
-    default: "gpt-5.2-codex-fast",
-    minimal: "gpt-5.2-codex-low-fast",
-    low: "gpt-5.2-codex-low-fast",
-    high: "gpt-5.2-codex-high-fast",
-    xhigh: "gpt-5.2-codex-xhigh-fast",
-  },
-  "gpt-5.3-codex": {
-    default: "gpt-5.3-codex",
-    minimal: "gpt-5.3-codex-low",
-    low: "gpt-5.3-codex-low",
-    high: "gpt-5.3-codex-high",
-    xhigh: "gpt-5.3-codex-xhigh",
-  },
-  "gpt-5.3-codex-fast": {
-    default: "gpt-5.3-codex-fast",
-    minimal: "gpt-5.3-codex-low-fast",
-    low: "gpt-5.3-codex-low-fast",
-    high: "gpt-5.3-codex-high-fast",
-    xhigh: "gpt-5.3-codex-xhigh-fast",
-  },
-  "gpt-5.1": {
-    default: "gpt-5.1-high",
-  },
-  "gpt-5.1-codex-max": {
-    default: "gpt-5.1-codex-max",
-    high: "gpt-5.1-codex-max-high",
-    xhigh: "gpt-5.1-codex-max-high",
-  },
-  "gemini-3-pro-preview": { default: "gemini-3-pro" },
-  "gemini-3-flash-preview": { default: "gemini-3-flash" },
-  "grok-code-fast-1": { default: "grok" },
+/** Old Pi / CLI ids → current family id. */
+const COMPAT_CANONICAL: Record<string, string> = {
+  "claude-sonnet-4-5": "claude-4.5-sonnet",
+  "claude-sonnet-4-6": "claude-4.6-sonnet",
+  "claude-opus-4-5": "claude-4.5-opus",
+  "claude-opus-4-6": "claude-4.6-opus",
+  "sonnet-4.5": "claude-4.5-sonnet",
+  "sonnet-4.6": "claude-4.6-sonnet",
+  "opus-4.5": "claude-4.5-opus",
+  "opus-4.6": "claude-4.6-opus",
+  "gemini-3-pro-preview": "gemini-3.1-pro",
+  "gemini-3-flash-preview": "gemini-3-flash",
+  "grok-code-fast-1": "cursor-grok-4.6",
+  grok: "cursor-grok-4.6",
+  "composer-1": "composer-2.5",
+  "composer-1.5": "composer-2.5",
+  "gpt-5.2-codex": "gpt-5.3-codex",
+  "gpt-5.2-codex-fast": "gpt-5.3-codex",
+  "gpt-5.1-codex-max": "gpt-5.3-codex",
 };
 
-const cursorDefaultToCanonical = new Map<string, string>();
-const allMappedCursorIds = new Set<string>();
-for (const [canonicalId, variants] of Object.entries(MODEL_MAP)) {
-  if (variants.default) cursorDefaultToCanonical.set(variants.default, canonicalId);
-  for (const cursorId of Object.values(variants)) {
-    if (cursorId) allMappedCursorIds.add(cursorId);
+const STATIC_MODELS_MAP = new Map<string, CursorModelDef>();
+for (const m of STATIC_MODELS) {
+  STATIC_MODELS_MAP.set(m.id, m);
+  STATIC_MODELS_MAP.set(parseCursorModelId(m.id).family, m);
+}
+
+/** Discovered CLI variants grouped by family. Filled by indexModelDefs(). */
+const familyVariants = new Map<string, CursorModelDef[]>();
+
+function stripModelParams(id: string): string {
+  const bracket = id.indexOf("[");
+  return bracket >= 0 ? id.slice(0, bracket) : id;
+}
+
+function parseCursorModelId(id: string): ParsedCursorModelId {
+  let rest = stripModelParams(id);
+  let fast = false;
+  let thinking = false;
+  let effort: string | undefined;
+
+  if (rest.endsWith("-fast")) {
+    fast = true;
+    rest = rest.slice(0, -5);
+  }
+  if (rest.endsWith("-thinking")) {
+    thinking = true;
+    rest = rest.slice(0, -9);
+  }
+  for (const suffix of EFFORT_SUFFIXES) {
+    const token = `-${suffix}`;
+    if (rest.endsWith(token)) {
+      effort = suffix;
+      rest = rest.slice(0, -token.length);
+      break;
+    }
+  }
+  if (rest.endsWith("-thinking")) {
+    thinking = true;
+    rest = rest.slice(0, -9);
+  }
+
+  return { family: rest, effort, thinking, fast };
+}
+
+function resolveFamily(modelId: string): string {
+  const raw = stripModelParams(modelId);
+  if (COMPAT_CANONICAL[raw]) return COMPAT_CANONICAL[raw];
+  const family = parseCursorModelId(raw).family;
+  return COMPAT_CANONICAL[family] ?? family;
+}
+
+function reasoningToEffort(level?: string): string | undefined {
+  switch (level as ReasoningLevel | undefined) {
+    case "minimal":
+      return "low";
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    case "high":
+      return "high";
+    case "xhigh":
+      return "xhigh";
+    default:
+      return undefined;
   }
 }
 
-/**
- * Convert a Cursor CLI model ID to its canonical ID.
- * Returns null for variant-only IDs (e.g. thinking); they are not shown as separate models.
- * Returns the id as-is for unmapped models.
- */
-function toCanonicalId(cursorId: string): string | null {
-  const canonical = cursorDefaultToCanonical.get(cursorId);
-  if (canonical) return canonical;
-  if (allMappedCursorIds.has(cursorId)) return null;
-  return cursorId;
+function pickVariant(family: string, reasoning?: string): string {
+  const defs = familyVariants.get(family) ?? [];
+  const wantThinking = Boolean(reasoning);
+  const wantEffort = reasoningToEffort(reasoning);
+  const familyHasThinking = defs.some((d) => parseCursorModelId(d.id).thinking);
+
+  if (defs.length === 0) {
+    if (wantEffort) return `${family}[effort=${wantEffort}]`;
+    return family;
+  }
+
+  let bestId = defs[0].id;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (const def of defs) {
+    const parsed = parseCursorModelId(def.id);
+    let score = 0;
+    if (parsed.fast) score -= 100;
+    if (familyHasThinking && wantThinking) {
+      score += parsed.thinking ? 50 : -50;
+    } else if (parsed.thinking) {
+      score -= 50;
+    }
+    if (wantEffort) {
+      if (parsed.effort === wantEffort) score += 40;
+      else if (wantEffort === "xhigh" && (parsed.effort === "extra-high" || parsed.effort === "max"))
+        score += 30;
+      else if (wantEffort === "low" && (parsed.effort === "none" || parsed.effort === "minimal"))
+        score += 20;
+      else if (parsed.effort == null && wantEffort === "medium") score += 25;
+    } else if (def.id === family || parsed.effort == null) {
+      score += 40;
+    } else if (parsed.effort === "medium") {
+      score += 30;
+    } else if (parsed.effort === "high") {
+      score += 20;
+    } else if (parsed.effort === "max") {
+      score += 10;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = def.id;
+    }
+  }
+
+  return bestId;
 }
 
-/**
- * Resolve a canonical model ID (and optional reasoning level) to the Cursor CLI model ID.
- * Returns the id as-is for unmapped models.
- */
 function toCursorId(canonicalId: string, reasoning?: string): string {
-  const family = MODEL_MAP[canonicalId];
-  if (!family) return canonicalId;
-  const level = reasoning as ReasoningLevel | undefined;
-  const variant = level && family[level];
-  return variant ?? family.default ?? canonicalId;
+  return pickVariant(resolveFamily(canonicalId), reasoning);
+}
+
+function inferReasoning(id: string): boolean {
+  return /(-thinking|-high|-xhigh|-extra-high|-max-high|-max)$/.test(id);
+}
+
+function inferAttrs(id: string, name: string): Pick<CursorModelDef, "reasoning" | "contextWindow" | "maxTokens"> {
+  const family = parseCursorModelId(id).family;
+  const known = STATIC_MODELS_MAP.get(id) ?? STATIC_MODELS_MAP.get(family);
+  if (known) {
+    return {
+      reasoning: known.reasoning,
+      contextWindow: known.contextWindow,
+      maxTokens: known.maxTokens,
+    };
+  }
+  const oneM = /1M|\b1m\b/i.test(name) || /^gemini/i.test(id);
+  return {
+    reasoning: inferReasoning(id),
+    contextWindow: oneM ? 1_000_000 : 200_000,
+    maxTokens: oneM ? 65_536 : 32_768,
+  };
+}
+
+function familyDisplayName(name: string): string {
+  return name
+    .replace(/\s+\(NO ZDR\)$/i, "")
+    .replace(/\s+(None|Minimal|Low|Medium|High|Extra High|Max)(\s+Fast)?$/i, "")
+    .replace(/\s+Fast$/i, "")
+    .trim();
+}
+
+function indexModelDefs(defs: CursorModelDef[]): void {
+  familyVariants.clear();
+  for (const def of defs) {
+    const family = resolveFamily(def.id);
+    const list = familyVariants.get(family) ?? [];
+    list.push(def);
+    familyVariants.set(family, list);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Dynamic model discovery via `agent models`
 // ---------------------------------------------------------------------------
 
-/** Timeout (ms) for `agent models` discovery call. */
 const DISCOVERY_TIMEOUT_MS = 15_000;
 
-/**
- * Infer the `reasoning` flag for a model that is not in the static list.
- * Models whose id ends with -thinking, -high, -xhigh, -max-high, or -max are
- * treated as reasoning/extended-thinking models.
- */
-function inferReasoning(id: string): boolean {
-  return /(-thinking|-high|-xhigh|-max-high)$/.test(id);
-}
-
-/**
- * Parse the text output of `agent models` into a list of model definitions.
- *
- * Expected format (one model per line after the header, before the tip):
- *   <id> - <name>  [(current[, default] | default)]
- *
- * Example lines:
- *   "auto - Auto"
- *   "opus-4.6-thinking - Claude 4.6 Opus (Thinking)  (default)"
- *   "sonnet-4.6 - Claude 4.6 Sonnet  (current)"
- */
 function parseAgentModelsOutput(output: string): CursorModelDef[] {
   const results: CursorModelDef[] = [];
-  // Match lines like: "model-id - Display Name  (optional flags)"
-  const lineRe = /^([a-zA-Z0-9][a-zA-Z0-9._-]*)\s+-\s+(.+?)(?:\s+\((?:current|default|current,\s*default)\))?$/;
+  const lineRe =
+    /^([a-zA-Z0-9][a-zA-Z0-9._-]*)\s+-\s+(.+?)(?:\s+\((?:current|default|current,\s*default)\))?$/;
 
   for (const line of output.split("\n")) {
     const trimmed = line.trim();
@@ -268,25 +313,18 @@ function parseAgentModelsOutput(output: string): CursorModelDef[] {
 
     const id = match[1].trim();
     const rawName = match[2].trim();
-
-    // Use static attributes if available, otherwise infer
-    const known = STATIC_MODELS_MAP.get(id);
+    const attrs = inferAttrs(id, rawName);
     results.push({
       id,
       name: rawName,
-      reasoning: known?.reasoning ?? inferReasoning(id),
-      contextWindow: known?.contextWindow ?? 200000,
-      maxTokens: known?.maxTokens ?? 32768,
+      reasoning: attrs.reasoning,
+      contextWindow: attrs.contextWindow,
+      maxTokens: attrs.maxTokens,
     });
   }
   return results;
 }
 
-/**
- * Run `agent models` and return the parsed model list.
- * Rejects if the CLI exits with an error, produces no usable output, or
- * exceeds the discovery timeout.
- */
 function runAgentModels(agentPath: string): Promise<CursorModelDef[]> {
   return new Promise((resolve, reject) => {
     const args = ["models"];
@@ -306,8 +344,12 @@ function runAgentModels(agentPath: string): Promise<CursorModelDef[]> {
       reject(new Error(`agent models timed out after ${DISCOVERY_TIMEOUT_MS}ms`));
     }, DISCOVERY_TIMEOUT_MS);
 
-    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
 
     child.on("error", (err) => {
       clearTimeout(timeout);
@@ -332,26 +374,98 @@ function runAgentModels(agentPath: string): Promise<CursorModelDef[]> {
 
 // ---------------------------------------------------------------------------
 // Prompt serialisation
-// Serialises the Pi context into a single text prompt for the CLI.
-// Cursor CLI receives the conversation as one -p "..." argument; multi-turn
-// history is included as a prefixed transcript (best-effort).
+// Prompt is delivered on stdin (not argv): a single Linux argv cannot exceed
+// MAX_ARG_STRLEN (131072), and long Pi sessions hit that during compaction.
+// Images are written to temp files; the CLI reads them via those paths.
 // ---------------------------------------------------------------------------
 
-/**
- * Convert a content block (text or image) to a plain string for the CLI prompt.
- * Images are serialised as a textual placeholder because the Cursor Agent CLI
- * (v2026.02.13) does not support image attachments in the `--print` prompt.
- * The placeholder preserves the image's MIME type and byte-size so the model
- * can at least acknowledge that an image was intended.
- */
-function contentBlockToText(block: TextContent | import("@mariozechner/pi-ai").ImageContent): string {
-  if (block.type === "text") return block.text;
-  // ImageContent: { type: "image", data: string (base64), mimeType: string }
-  const bytes = Math.round((block.data.length * 3) / 4);
-  return `[Image: ${block.mimeType}, ~${bytes} bytes — note: image input is not supported by the Cursor Agent CLI; the visual content cannot be passed through]`;
+const MIME_TYPE_TO_EXTENSION: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "image/svg+xml": "svg",
+  "image/bmp": "bmp",
+  "image/tiff": "tiff",
+};
+
+interface PromptTempFiles {
+  dir: string | null;
+  imageCount: number;
 }
 
-function serializeContext(context: Context): string {
+interface ImageBlock {
+  type: "image";
+  mimeType: string;
+  data?: string;
+  path?: string;
+}
+
+function spawnAgentPrint(agentPath: string, args: string[], prompt: string): ChildProcess {
+  const child = spawn(agentPath, args, {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: process.env,
+  });
+  child.stdin?.on("error", () => {});
+  child.stdin?.end(prompt, "utf8");
+  return child;
+}
+
+function stripDataUrlPrefix(data: string): string {
+  return data.replace(/^data:[^;]+;base64,/, "").replace(/\s+/g, "");
+}
+
+function getImageExtension(mimeType: string): string {
+  return MIME_TYPE_TO_EXTENSION[mimeType] ?? "bin";
+}
+
+async function ensurePromptTempDir(state: PromptTempFiles): Promise<string> {
+  if (state.dir) return state.dir;
+  state.dir = await mkdtemp(join(tmpdir(), "pi-cursor-provider-"));
+  return state.dir;
+}
+
+async function cleanupPromptTempFiles(state: PromptTempFiles): Promise<void> {
+  if (!state.dir) return;
+  const dir = state.dir;
+  state.dir = null;
+  await rm(dir, { recursive: true, force: true });
+}
+
+async function imageBlockToPromptText(block: ImageBlock, state: PromptTempFiles): Promise<string> {
+  if (block.path) return block.path;
+  const data = block.data;
+  if (!data) {
+    return `[Image: ${block.mimeType} — no image data was provided]`;
+  }
+  const dir = await ensurePromptTempDir(state);
+  state.imageCount += 1;
+  const path = join(dir, `image-${state.imageCount}.${getImageExtension(block.mimeType)}`);
+  await writeFile(path, Buffer.from(stripDataUrlPrefix(data), "base64"));
+  return path;
+}
+
+async function contentBlockToText(
+  block: TextContent | ImageContent,
+  state: PromptTempFiles,
+): Promise<string> {
+  if (block.type === "text") return block.text;
+  return imageBlockToPromptText(block as ImageBlock, state);
+}
+
+async function serializeContentBlocks(
+  blocks: (TextContent | ImageContent)[],
+  state: PromptTempFiles,
+): Promise<string> {
+  const parts: string[] = [];
+  for (const block of blocks) {
+    parts.push(await contentBlockToText(block, state));
+  }
+  return parts.join("\n");
+}
+
+async function serializeContext(context: Context, state: PromptTempFiles): Promise<string> {
   const lines: string[] = [];
 
   if (context.systemPrompt) {
@@ -363,7 +477,7 @@ function serializeContext(context: Context): string {
       const text =
         typeof msg.content === "string"
           ? msg.content
-          : msg.content.map(contentBlockToText).join("\n");
+          : await serializeContentBlocks(msg.content, state);
       lines.push(`[User]\n${text}`);
     } else if (msg.role === "assistant") {
       const text = msg.content
@@ -374,7 +488,7 @@ function serializeContext(context: Context): string {
         lines.push(`[Assistant]\n${text}`);
       }
     } else if (msg.role === "toolResult") {
-      const text = msg.content.map(contentBlockToText).join("\n");
+      const text = await serializeContentBlocks(msg.content, state);
       if (text.trim()) {
         lines.push(`[Tool result: ${msg.toolName}]\n${text}`);
       }
@@ -392,15 +506,14 @@ interface CursorAssistantEvent {
   type: "assistant";
   message: { role: "assistant"; content: Array<{ type: "text"; text: string }> };
   session_id: string;
+  timestamp_ms?: number;
+  model_call_id?: string;
 }
 
-/**
- * A single Cursor CLI tool call (the value keyed by tool name).
- * The key is the tool name in camelCase (e.g. "shellToolCall", "readToolCall").
- * args are present on both started and completed; result only on completed.
- */
 interface CursorToolCallPayload {
-  args: Record<string, unknown>;
+  args?: Record<string, unknown>;
+  name?: string;
+  arguments?: string;
   result?: {
     success?: Record<string, unknown>;
     rejected?: { reason?: string };
@@ -411,7 +524,6 @@ interface CursorToolCallPayload {
 interface CursorToolCallEvent {
   type: "tool_call";
   subtype: "started" | "completed";
-  /** The outer object has exactly one key: the tool name (e.g. "shellToolCall"). */
   tool_call: Record<string, CursorToolCallPayload>;
 }
 
@@ -437,6 +549,18 @@ function parseLine(line: string): CursorStreamEvent | null {
   }
 }
 
+/**
+ * With --stream-partial-output, only timestamped deltas without model_call_id
+ * contain new text. Buffered flushes are duplicates and must be skipped.
+ * Aggregated mode (no partial flag) emits one unique assistant event per segment.
+ */
+function isNewAssistantDelta(event: CursorAssistantEvent): boolean {
+  const hasTs = typeof event.timestamp_ms === "number";
+  const hasMc = typeof event.model_call_id === "string" && event.model_call_id.length > 0;
+  if (hasTs || hasMc) return hasTs && !hasMc;
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Tool name mapping — CLI camelCase key → Pi display name
 // ---------------------------------------------------------------------------
@@ -455,11 +579,27 @@ const TOOL_NAME_MAP: Record<string, string> = {
   findToolCall: "Find",
   webFetchToolCall: "WebFetch",
   webSearchToolCall: "WebSearch",
+  taskToolCall: "Task",
+  generateImageToolCall: "GenerateImage",
 };
 
-/** Convert a CLI tool event key (e.g. "shellToolCall") to a Pi tool name. */
 function toPiToolName(cliKey: string): string {
   return TOOL_NAME_MAP[cliKey] ?? cliKey.replace(/ToolCall$/, "");
+}
+
+function describeToolCall(event: CursorToolCallEvent): { name: string; argsSnippet: string } | null {
+  const cliKey = Object.keys(event.tool_call)[0];
+  if (!cliKey) return null;
+  const payload = event.tool_call[cliKey];
+  if (cliKey === "function") {
+    const name = payload.name ?? "Function";
+    const raw = payload.arguments ?? JSON.stringify(payload.args ?? {});
+    const argsSnippet = raw.length > 120 ? `${raw.slice(0, 120)}…` : raw;
+    return { name, argsSnippet };
+  }
+  const argsSnippet = JSON.stringify(payload.args ?? {});
+  const brief = argsSnippet.length > 120 ? `${argsSnippet.slice(0, 120)}…` : argsSnippet;
+  return { name: toPiToolName(cliKey), argsSnippet: brief };
 }
 
 // ---------------------------------------------------------------------------
@@ -500,25 +640,33 @@ function streamCursorCli(
       output.ttft = firstTokenTime != null ? firstTokenTime - startTime : undefined;
     };
 
+    const promptTempFiles: PromptTempFiles = { dir: null, imageCount: 0 };
+
     try {
       const agentPath =
-        process.env["CURSOR_AGENT_PATH"] ??
-        process.env["AGENT_PATH"] ??
-        "agent";
+        process.env["CURSOR_AGENT_PATH"] ?? process.env["AGENT_PATH"] ?? "agent";
 
       const workspacePath = process.cwd();
-      const prompt = serializeContext(context);
+      const prompt = await serializeContext(context, promptTempFiles);
       const reasoningLevel = (options as { reasoning?: string })?.reasoning;
       const cliModelId = toCursorId(model.id, reasoningLevel);
 
       const args = [
         "--print",
-        "--output-format", "stream-json",
-        "--model", cliModelId,
+        "--output-format",
+        "stream-json",
+        "--stream-partial-output",
+        "--model",
+        cliModelId,
         "--trust",
-        "--workspace", workspacePath,
-        prompt,
+        "--workspace",
+        workspacePath,
+        "--approve-mcps",
       ];
+
+      if (process.env["CURSOR_AGENT_FORCE"] !== "0") {
+        args.push("--force");
+      }
 
       if (process.env["CURSOR_API_KEY"]) {
         args.unshift("--api-key", process.env["CURSOR_API_KEY"]);
@@ -526,10 +674,7 @@ function streamCursorCli(
 
       stream.push({ type: "start", partial: output });
 
-      const child = spawn(agentPath, args, {
-        stdio: ["ignore", "pipe", "pipe"],
-        env: process.env,
-      });
+      const child = spawnAgentPrint(agentPath, args, prompt);
 
       const onAbort = () => {
         child.kill("SIGTERM");
@@ -544,6 +689,22 @@ function streamCursorCli(
       let textBlockOpen = false;
       let accumulatedText = "";
 
+      const appendText = (delta: string) => {
+        if (!delta) return;
+        if (firstTokenTime === undefined) firstTokenTime = Date.now();
+        if (!textBlockOpen) {
+          output.content.push({ type: "text", text: "" });
+          const idx = output.content.length - 1;
+          stream.push({ type: "text_start", contentIndex: idx, partial: output });
+          textBlockOpen = true;
+        }
+        const idx = output.content.length - 1;
+        const textBlock = output.content[idx] as TextContent;
+        textBlock.text += delta;
+        accumulatedText += delta;
+        stream.push({ type: "text_delta", contentIndex: idx, delta, partial: output });
+      };
+
       const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
 
       rl.on("line", (line: string) => {
@@ -552,53 +713,20 @@ function streamCursorCli(
 
         if (event.type === "assistant") {
           const ae = event as CursorAssistantEvent;
+          if (!isNewAssistantDelta(ae)) return;
           for (const block of ae.message.content) {
             if (block.type !== "text") continue;
-            if (!block.text.trim()) continue;
-
-            if (firstTokenTime === undefined) firstTokenTime = Date.now();
-            if (!textBlockOpen) {
-              output.content.push({ type: "text", text: "" });
-              const idx = output.content.length - 1;
-              stream.push({ type: "text_start", contentIndex: idx, partial: output });
-              textBlockOpen = true;
-            }
-
-            const idx = output.content.length - 1;
-            const textBlock = output.content[idx] as TextContent;
-            textBlock.text += block.text;
-            accumulatedText += block.text;
-            stream.push({ type: "text_delta", contentIndex: idx, delta: block.text, partial: output });
+            appendText(block.text);
           }
           return;
         }
 
-        // Tool calls are rendered as informational text, not as Pi toolcall_*
-        // events, to prevent Pi's agentic loop from re-invoking streamSimple.
         if (event.type === "tool_call") {
           const tce = event as CursorToolCallEvent;
-          const cliKey = Object.keys(tce.tool_call)[0];
-          if (!cliKey) return;
-          const toolName = toPiToolName(cliKey);
-
-          if (tce.subtype === "started") {
-            const payload = tce.tool_call[cliKey];
-            const argsSnippet = JSON.stringify(payload.args ?? {});
-            const brief = argsSnippet.length > 120 ? argsSnippet.slice(0, 120) + "…" : argsSnippet;
-            const marker = `\n⏳ [${toolName}] ${brief}\n`;
-
-            if (!textBlockOpen) {
-              output.content.push({ type: "text", text: "" });
-              const idx = output.content.length - 1;
-              stream.push({ type: "text_start", contentIndex: idx, partial: output });
-              textBlockOpen = true;
-            }
-            const idx = output.content.length - 1;
-            const textBlock = output.content[idx] as TextContent;
-            textBlock.text += marker;
-            accumulatedText += marker;
-            stream.push({ type: "text_delta", contentIndex: idx, delta: marker, partial: output });
-          }
+          if (tce.subtype !== "started") return;
+          const described = describeToolCall(tce);
+          if (!described) return;
+          appendText(`\n⏳ [${described.name}] ${described.argsSnippet}\n`);
         }
       });
 
@@ -608,7 +736,12 @@ function streamCursorCli(
 
           if (textBlockOpen) {
             const idx = output.content.length - 1;
-            stream.push({ type: "text_end", contentIndex: idx, content: accumulatedText, partial: output });
+            stream.push({
+              type: "text_end",
+              contentIndex: idx,
+              content: accumulatedText,
+              partial: output,
+            });
             textBlockOpen = false;
           }
 
@@ -654,6 +787,8 @@ function streamCursorCli(
       setTiming();
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
+    } finally {
+      await cleanupPromptTempFiles(promptTempFiles);
     }
   })();
 
@@ -664,16 +799,9 @@ function streamCursorCli(
 // Auth helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Spawn `agent login` in an interactive child process so the user can
- * authenticate with Cursor from within a Pi session.
- * Returns a promise that resolves when login completes (exit 0) and rejects
- * on non-zero exit or spawn error.
- */
 function runAgentLogin(agentPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const args: string[] = ["login"];
-    // Suppress browser-open so login is purely CLI-driven (prints URL/code)
     const env = { ...process.env, NO_OPEN_BROWSER: "1" };
 
     const child = spawn(agentPath, args, {
@@ -689,9 +817,6 @@ function runAgentLogin(agentPath: string): Promise<void> {
   });
 }
 
-/**
- * Run `agent status` and return the trimmed output (e.g. "✓ Logged in as …").
- */
 function runAgentStatus(agentPath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     let out = "";
@@ -699,8 +824,12 @@ function runAgentStatus(agentPath: string): Promise<string> {
       stdio: ["ignore", "pipe", "pipe"],
       env: process.env,
     });
-    child.stdout?.on("data", (c: Buffer) => { out += c.toString(); });
-    child.stderr?.on("data", (c: Buffer) => { out += c.toString(); });
+    child.stdout?.on("data", (c: Buffer) => {
+      out += c.toString();
+    });
+    child.stderr?.on("data", (c: Buffer) => {
+      out += c.toString();
+    });
     child.on("error", (err) => reject(err));
     child.on("close", () => resolve(out.trim()));
   });
@@ -710,39 +839,49 @@ function runAgentStatus(agentPath: string): Promise<string> {
 // Extension entry point
 // ---------------------------------------------------------------------------
 
-/**
- * Build a ProviderModelConfig array from a list of CursorModelDef entries.
- * Uses canonical IDs where a mapping exists and omits variant-only entries.
- */
 function toProviderModels(defs: CursorModelDef[]) {
+  indexModelDefs(defs);
   const seen = new Set<string>();
-  return defs.flatMap((m) => {
-    const canonicalId = toCanonicalId(m.id);
-    if (canonicalId === null) return []; // variant-only; hide
-    const id = canonicalId !== m.id ? canonicalId : m.id;
-    if (seen.has(id)) return [];
-    seen.add(id);
-    return [
-      {
-        id,
-        name: `${m.name} (Cursor)`,
-        reasoning: m.reasoning,
-        input: ["text"] as ("text" | "image")[],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: m.contextWindow,
-        maxTokens: m.maxTokens,
-      },
-    ];
-  });
+  const models: Array<{
+    id: string;
+    name: string;
+    reasoning: boolean;
+    input: ("text" | "image")[];
+    cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+    contextWindow: number;
+    maxTokens: number;
+  }> = [];
+
+  for (const [family, variants] of familyVariants) {
+    if (seen.has(family)) continue;
+    seen.add(family);
+
+    const defaultId = pickVariant(family);
+    const defaultDef = variants.find((v) => v.id === defaultId) ?? variants[0];
+    const hasThinking = variants.some((v) => parseCursorModelId(v.id).thinking);
+    const effortCount = new Set(
+      variants.map((v) => parseCursorModelId(v.id).effort).filter(Boolean),
+    ).size;
+    const attrs = inferAttrs(defaultDef.id, defaultDef.name);
+
+    models.push({
+      id: family,
+      name: `${familyDisplayName(defaultDef.name)} (Cursor)`,
+      reasoning: hasThinking || effortCount > 1 || attrs.reasoning,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: attrs.contextWindow,
+      maxTokens: attrs.maxTokens,
+    });
+  }
+
+  return models;
 }
 
 export default async function (pi: ExtensionAPI) {
   const agentPath =
-    process.env["CURSOR_AGENT_PATH"] ??
-    process.env["AGENT_PATH"] ??
-    "agent";
+    process.env["CURSOR_AGENT_PATH"] ?? process.env["AGENT_PATH"] ?? "agent";
 
-  // Attempt dynamic model discovery; fall back to static list on any failure.
   let modelDefs: CursorModelDef[];
   try {
     modelDefs = await runAgentModels(agentPath);
@@ -752,20 +891,34 @@ export default async function (pi: ExtensionAPI) {
 
   pi.registerProvider("cursor", {
     baseUrl: "cli://cursor-agent",
-    apiKey: "CURSOR_API_KEY",
+    // Auth is handled by the Cursor CLI (`agent login` or CURSOR_API_KEY).
+    // A literal non-empty value is required so Pi 0.77+ considers the
+    // provider authenticated. This value is never sent on the wire.
+    apiKey: CURSOR_CLI_PLACEHOLDER_API_KEY,
+    oauth: {
+      name: "Cursor CLI",
+      async login() {
+        throw new Error("Authenticate with Cursor using `agent login` or /cursor-login");
+      },
+      async refreshToken(credentials) {
+        return { ...credentials, expires: Number.MAX_SAFE_INTEGER };
+      },
+      getApiKey() {
+        return CURSOR_CLI_PLACEHOLDER_API_KEY;
+      },
+    },
     api: "cursor-cli" as Api,
     models: toProviderModels(modelDefs),
     streamSimple: streamCursorCli,
   });
 
-  // ---------------------------------------------------------------------------
-  // Slash commands for Cursor auth management
-  // ---------------------------------------------------------------------------
-
   pi.registerCommand("cursor-login", {
     description: "Log in to Cursor (runs `agent login`)",
     handler: async (_args, ctx) => {
-      ctx.ui.notify("Starting Cursor login (NO_OPEN_BROWSER=1 — copy the URL from the output)…", "info");
+      ctx.ui.notify(
+        "Starting Cursor login (NO_OPEN_BROWSER=1 — copy the URL from the output)…",
+        "info",
+      );
       try {
         await runAgentLogin(agentPath);
         ctx.ui.notify("Cursor login successful.", "info");

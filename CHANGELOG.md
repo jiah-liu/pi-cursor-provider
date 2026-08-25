@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0]
+
+### Added
+
+- **Cursor CLI 2026.08 compatibility**: `--stream-partial-output` for token-level streaming (duplicate buffered flushes are skipped), `--force` so print mode applies edits, and `--approve-mcps`.
+- **Image input**: Pi image blocks are written to temp files and passed as paths the CLI can read.
+- **Model families**: `agent models` variants (effort / thinking / fast) are grouped into one Pi model per family. Reasoning level selects the matching CLI id. Fallback list updated for CLI `2026.08.11`.
+- **MCP `function` tool calls**: generic `tool_call.function` events are shown by name.
+
+### Fixed
+
+- **Linux `E2BIG`**: the print prompt is delivered on stdin instead of argv, so long sessions and Pi auto-compaction no longer fail at `MAX_ARG_STRLEN` (131072).
+- **Pi 0.77+ `No API key found for cursor`**: `registerProvider` uses a literal placeholder `apiKey` so models appear after `agent login` without exporting `CURSOR_API_KEY`.
+
+### Changed
+
+- Default print invocation includes `--force`. Set `CURSOR_AGENT_FORCE=0` to opt out.
+
 ## [0.1.2]
 
 ### Added

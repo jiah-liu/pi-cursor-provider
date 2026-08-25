@@ -53,8 +53,8 @@ No separate API keys are needed for the models themselves. Authentication is han
 
 | Requirement | Details |
 |---|---|
-| [Pi Coding Agent](https://github.com/badlogic/pi-mono) | `npm install -g @mariozechner/pi-coding-agent` (v0.53.0+) |
-| [Cursor Agent CLI](https://cursor.com/docs/cli/overview) | Installed and available on `PATH` (or provide the path via `CURSOR_AGENT_PATH`) |
+| [Pi Coding Agent](https://github.com/badlogic/pi-mono) | `npm install -g @mariozechner/pi-coding-agent` (v0.53.0+; v0.77+ recommended) |
+| [Cursor Agent CLI](https://cursor.com/docs/cli/overview) | Installed and on `PATH` (or `CURSOR_AGENT_PATH`). Tested with CLI `2026.08.11`. |
 | Cursor account | Free or paid; available models depend on your subscription |
 
 ---
@@ -107,6 +107,8 @@ pi remove ~/sandbox/pi-cursor-provider
 
 The provider delegates authentication entirely to the Cursor CLI. Your Cursor credentials are stored and managed by the CLI itself (`~/.cursor/`).
 
+Pi 0.77+ no longer requires `CURSOR_API_KEY` to be set for this provider: `agent login` is enough. Set `CURSOR_API_KEY` only if you want to pass a dashboard key into the CLI.
+
 ### First-time setup
 
 ```bash
@@ -150,9 +152,10 @@ After loading the extension, select a Cursor model with the `/model` command:
 
 ```
 /model cursor/auto
-/model cursor/sonnet-4.6-thinking
-/model cursor/gpt-5.2
-/model cursor/gemini-3-pro
+/model cursor/composer-2.5
+/model cursor/claude-opus-4-8
+/model cursor/gpt-5.5
+/model cursor/gemini-3.1-pro
 ```
 
 You can also specify the model on the command line:
@@ -165,7 +168,7 @@ Or pipe a prompt non-interactively:
 
 ```bash
 echo "Explain the main function in this file" | \
-  pi -e npm:@netandreus/pi-cursor-provider --provider cursor --model sonnet-4.6
+  pi -e npm:@netandreus/pi-cursor-provider --provider cursor --model claude-opus-4-8
 ```
 
 ---
@@ -173,6 +176,8 @@ echo "Explain the main function in this file" | \
 ## Available models
 
 At startup the extension runs `agent models` to discover the **account-specific** model list from your Cursor subscription. The list is cached for the lifetime of the Pi session.
+
+Cursor CLI now exposes many parameterized variants (effort, thinking, fast). The provider **groups them into families** so `/model` stays usable — for example `claude-opus-4-8-thinking-high-fast` is registered as `cursor/claude-opus-4-8`. Pi's reasoning level is mapped back to the matching CLI variant.
 
 If discovery fails (e.g. the CLI is not installed, not authenticated, or times out), a built-in static fallback list is used automatically — no crash, no user action needed.
 
@@ -182,33 +187,31 @@ To see the models currently available to your account:
 agent models
 ```
 
-Models whose id contains `-thinking`, `-high`, `-xhigh`, or `-max-high` are marked as reasoning models in Pi. All other metadata (contextWindow, maxTokens) is derived from the static lookup table or set to safe defaults (200k context / 32k max tokens) for models not in the table.
+Models with thinking or multiple effort variants are marked as reasoning models in Pi. Context windows of 1M are taken from the CLI display name when present; otherwise 200k / 32k defaults apply.
 
-When you use a **canonical ID** (e.g. `claude-sonnet-4-5`), the provider can send the thinking variant to the CLI when Pi’s reasoning level is enabled.
+Old ids such as `claude-sonnet-4-6` or `sonnet-4.6` still resolve to the current family.
 
 ### Model reference table
 
-Subset of models supported by the provider. Use the **Canonical ID** with `/model cursor/<id>`. The full list is discoverable via `agent models`.
+Subset of families. Use the **Family ID** with `/model cursor/<id>`. The live list comes from `agent models`.
 
-| Canonical ID | CLI model ID | Name | Reasoning |
-|---|---|---|---|
-| `auto` | `auto` | Auto | — |
-| `claude-sonnet-4-5` | `sonnet-4.5`, `sonnet-4.5-thinking` | Claude 4.5 Sonnet | yes (thinking variant) |
-| `claude-sonnet-4-6` | `sonnet-4.6`, `sonnet-4.6-thinking` | Claude 4.6 Sonnet | yes (thinking variant) |
-| `claude-opus-4-5` | `opus-4.5`, `opus-4.5-thinking` | Claude 4.5 Opus | yes (thinking variant) |
-| `claude-opus-4-6` | `opus-4.6`, `opus-4.6-thinking` | Claude 4.6 Opus | yes (thinking variant) |
-| `gpt-5.2` | `gpt-5.2`, `gpt-5.2-high` | GPT-5.2 | yes (high variant) |
-| `gpt-5.2-codex` | `gpt-5.2-codex`, `-low`, `-high`, `-xhigh` | GPT-5.2 Codex | yes (level variants) |
-| `gpt-5.2-codex-fast` | `gpt-5.2-codex-fast`, `-low-fast`, … | GPT-5.2 Codex Fast | yes (level variants) |
-| `gpt-5.3-codex` | `gpt-5.3-codex`, `-low`, `-high`, `-xhigh` | GPT-5.3 Codex | yes (level variants) |
-| `gpt-5.3-codex-fast` | `gpt-5.3-codex-fast`, … | GPT-5.3 Codex Fast | yes (level variants) |
-| `gpt-5.1` | `gpt-5.1-high` | GPT-5.1 High | yes |
-| `gpt-5.1-codex-max` | `gpt-5.1-codex-max`, `-max-high` | GPT-5.1 Codex Max | yes |
-| `gemini-3-pro-preview` | `gemini-3-pro` | Gemini 3 Pro | — |
-| `gemini-3-flash-preview` | `gemini-3-flash` | Gemini 3 Flash | — |
-| `grok-code-fast-1` | `grok` | Grok | — |
-| `composer-1.5` | `composer-1.5` | Composer 1.5 | — |
-| `composer-1` | `composer-1` | Composer 1 | — |
+| Family ID | Example CLI ids | Name |
+|---|---|---|
+| `auto` | `auto` | Auto |
+| `composer-2.5` | `composer-2.5`, `composer-2.5-fast` | Composer 2.5 |
+| `claude-opus-4-8` | `claude-opus-4-8-medium`, `…-thinking-high` | Claude Opus 4.8 |
+| `claude-opus-5` | `claude-opus-5-medium`, `…-thinking-high` | Claude Opus 5 |
+| `claude-sonnet-5` | `claude-sonnet-5-medium`, `…-thinking-high` | Claude Sonnet 5 |
+| `claude-4.6-sonnet` | `claude-4.6-sonnet-medium`, `…-thinking` | Claude Sonnet 4.6 |
+| `claude-4.6-opus` | `claude-4.6-opus-high`, `…-thinking` | Claude Opus 4.6 |
+| `gpt-5.5` | `gpt-5.5-medium`, `gpt-5.5-high` | GPT-5.5 |
+| `gpt-5.4` | `gpt-5.4-medium`, `gpt-5.4-high` | GPT-5.4 |
+| `gpt-5.3-codex` | `gpt-5.3-codex`, `…-high`, `…-fast` | Codex 5.3 |
+| `gpt-5.2` | `gpt-5.2`, `gpt-5.2-high` | GPT-5.2 |
+| `cursor-grok-4.6` | `cursor-grok-4.6-medium`, `…-high-fast` | Cursor Grok 4.6 |
+| `gemini-3.1-pro` | `gemini-3.1-pro` | Gemini 3.1 Pro |
+| `gemini-3.7-flash` | `gemini-3.7-flash-medium` | Gemini 3.7 Flash |
+| `kimi-k3` | `kimi-k3-high`, `kimi-k3-max` | Kimi K3 |
 
 ---
 
@@ -219,6 +222,7 @@ Subset of models supported by the provider. Use the **Canonical ID** with `/mode
 | `CURSOR_AGENT_PATH` | `agent` | Full path to the Cursor Agent CLI binary. |
 | `AGENT_PATH` | `agent` | Fallback if `CURSOR_AGENT_PATH` is not set. |
 | `CURSOR_API_KEY` | *(none)* | Cursor API key; passed to CLI via `--api-key` if set. |
+| `CURSOR_AGENT_FORCE` | *(enabled)* | Set to `0` to omit `--force` (print mode will propose edits instead of applying them). |
 
 Example:
 
@@ -234,12 +238,14 @@ pi -e npm:@netandreus/pi-cursor-provider --provider cursor --model auto
 Each Pi turn spawns a Cursor Agent CLI subprocess:
 
 ```
-agent --print --output-format stream-json --model <id> --trust --workspace <cwd> "<prompt>"
+agent --print --output-format stream-json --stream-partial-output \
+  --model <id> --trust --workspace <cwd> --approve-mcps --force
 ```
 
-The extension serialises the Pi conversation (system prompt + message history) into a single text prompt that is passed to the CLI. The CLI's NDJSON stdout is read line-by-line; `type: "assistant"` events are mapped to Pi stream events (`text_start`, `text_delta`, `text_end`, `done`).
+The prompt is written to **stdin** (not argv) so long sessions do not hit Linux `MAX_ARG_STRLEN` / `E2BIG`. The CLI's NDJSON stdout is read line-by-line; streaming `assistant` deltas are mapped to Pi stream events (`text_start`, `text_delta`, `text_end`, `done`). Duplicate buffered flushes (`model_call_id` / final flush without `timestamp_ms`) are skipped.
 
 - **Multi-turn context**: The full message history is serialised as a prefixed transcript (`[User] / [Assistant] / [Tool result]`) and sent as a single prompt. Cursor manages its own internal conversation from that point.
+- **Edits in print mode**: `--force` is passed so the CLI applies writes instead of only proposing them. Set `CURSOR_AGENT_FORCE=0` to opt out.
 - **Token usage**: Cursor CLI does not expose token counts; usage is reported as 0.
 - **Cost tracking**: Models are registered with `cost: 0` since billing goes through your Cursor subscription.
 
@@ -266,6 +272,7 @@ Supported Cursor CLI tools that appear in Pi's output:
 | `todoToolCall` | Todo |
 | `webFetchToolCall` | WebFetch |
 | `webSearchToolCall` | WebSearch |
+| `function` (MCP / generic) | tool `name` from the payload |
 
 ---
 
@@ -356,23 +363,17 @@ Ensure `~/.cursor/cli-config.json` allows the MCP tools. For example:
 
 ## Image input
 
-The Cursor Agent CLI does **not** support image attachments in `--print` mode. When Pi messages contain images (e.g. screenshots), the provider serialises them as a textual placeholder:
+The Cursor Agent CLI reads images from file paths in the prompt. When Pi messages contain images:
 
-```
-[Image: image/png, ~48320 bytes — note: image input is not supported by the Cursor Agent CLI; the visual content cannot be passed through]
-```
+- If the block already has a filesystem `path`, that path is passed through.
+- Otherwise the provider writes the image bytes to a temp file and includes the path in the prompt.
 
-- The text of the conversation is still sent and a response is returned.
-- The model is informed that an image was attached but cannot see its contents.
-- Models are registered with `input: ["text"]` only to reflect this limitation.
-
-Image input will be enabled automatically if a future Cursor CLI version adds an attachment flag.
+Models are registered with `input: ["text", "image"]`. Temp files are deleted when the turn finishes.
 
 ---
 
 ## Limitations
 
-- Image content cannot be passed to the model (Cursor CLI limitation — see above).
 - Multi-turn history is serialised as plain text; very long conversations may exceed the model's context window.
 - Token usage is always reported as 0 (the Cursor CLI does not expose token counts).
 
@@ -383,7 +384,9 @@ Image input will be enabled automatically if a future Cursor CLI version adds an
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `spawn agent ENOENT` | `agent` binary not on PATH | Set `CURSOR_AGENT_PATH=/path/to/agent` |
-| Empty response / hangs | Not logged in to Cursor | Run `agent login` or set `CURSOR_API_KEY` |
+| Empty response / hangs | Not logged in to Cursor, or print mode waiting for approvals | Run `agent login` or set `CURSOR_API_KEY`. `--force` is on by default. |
+| `No API key found for cursor` | Pi 0.77+ used to require `CURSOR_API_KEY` | Upgrade this provider to 0.2.0+; `agent login` is enough. |
+| `spawn E2BIG` | Old provider put the prompt in argv | Upgrade this provider; prompts now go on stdin. |
 | `No models available` | Cursor CLI cannot reach the API | Check internet connection and `agent status` |
 | Error on a specific model | Model not in your subscription | Run `agent models` to see available models |
 | NDJSON parse errors | Unexpected CLI output | Check stderr; update Cursor Agent CLI |
