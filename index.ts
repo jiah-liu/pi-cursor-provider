@@ -31,6 +31,7 @@ import type {
   Model,
   SimpleStreamOptions,
   TextContent,
+  ThinkingContent,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -587,19 +588,54 @@ function toPiToolName(cliKey: string): string {
   return TOOL_NAME_MAP[cliKey] ?? cliKey.replace(/ToolCall$/, "");
 }
 
-function describeToolCall(event: CursorToolCallEvent): { name: string; argsSnippet: string } | null {
-  const cliKey = Object.keys(event.tool_call)[0];
-  if (!cliKey) return null;
-  const payload = event.tool_call[cliKey];
+function briefArg(value: unknown, max = 80): string {
+  if (typeof value === "string") {
+    const trimmed = value.replace(/\s+/g, " ").trim();
+    return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
+  }
+  if (value == null) return "";
+  const raw = JSON.stringify(value);
+  return raw.length > max ? `${raw.slice(0, max)}…` : raw;
+}
+
+/** One-line thinking trace for a Cursor CLI tool call. Not a Pi-executable toolCall. */
+function formatToolActivity(cliKey: string, payload: CursorToolCallPayload): string {
   if (cliKey === "function") {
     const name = payload.name ?? "Function";
-    const raw = payload.arguments ?? JSON.stringify(payload.args ?? {});
-    const argsSnippet = raw.length > 120 ? `${raw.slice(0, 120)}…` : raw;
-    return { name, argsSnippet };
+    const args = payload.arguments ?? briefArg(payload.args);
+    return args ? `${name} ${args}` : name;
   }
-  const argsSnippet = JSON.stringify(payload.args ?? {});
-  const brief = argsSnippet.length > 120 ? `${argsSnippet.slice(0, 120)}…` : argsSnippet;
-  return { name: toPiToolName(cliKey), argsSnippet: brief };
+  const name = toPiToolName(cliKey);
+  const args = payload.args ?? {};
+  const primary =
+    args["path"] ??
+    args["command"] ??
+    args["pattern"] ??
+    args["globPattern"] ??
+    args["glob_pattern"] ??
+    args["url"] ??
+    args["search_term"] ??
+    args["searchTerm"] ??
+    args["query"] ??
+    args["target_directory"] ??
+    args["targetDirectory"];
+  const primaryText = briefArg(primary);
+  if (primaryText) return `${name} ${primaryText}`;
+  const rest = briefArg(args);
+  return rest && rest !== "{}" ? `${name} ${rest}` : name;
+}
+
+/**
+ * Cursor may emit either true token deltas or growing snapshots of the same
+ * segment. Convert a new assistant payload into the unseen suffix only.
+ */
+function assistantTextDelta(previous: string, incoming: string): string {
+  if (!incoming) return "";
+  if (!previous) return incoming;
+  if (incoming === previous) return "";
+  if (incoming.startsWith(previous)) return incoming.slice(previous.length);
+  if (previous.startsWith(incoming)) return "";
+  return incoming;
 }
 
 // ---------------------------------------------------------------------------
@@ -687,11 +723,46 @@ function streamCursorCli(
       });
 
       let textBlockOpen = false;
-      let accumulatedText = "";
+      let thinkingBlockOpen = false;
+      let currentBlockText = "";
+      let segmentText = "";
+      let hasOutput = false;
+
+      const closeTextBlock = () => {
+        if (!textBlockOpen) return;
+        const idx = output.content.length - 1;
+        stream.push({
+          type: "text_end",
+          contentIndex: idx,
+          content: currentBlockText,
+          partial: output,
+        });
+        textBlockOpen = false;
+        currentBlockText = "";
+      };
+
+      const closeThinkingBlock = () => {
+        if (!thinkingBlockOpen) return;
+        const idx = output.content.length - 1;
+        stream.push({
+          type: "thinking_end",
+          contentIndex: idx,
+          content: currentBlockText,
+          partial: output,
+        });
+        thinkingBlockOpen = false;
+        currentBlockText = "";
+      };
+
+      const closeOpenBlock = () => {
+        closeTextBlock();
+        closeThinkingBlock();
+      };
 
       const appendText = (delta: string) => {
         if (!delta) return;
         if (firstTokenTime === undefined) firstTokenTime = Date.now();
+        closeThinkingBlock();
         if (!textBlockOpen) {
           output.content.push({ type: "text", text: "" });
           const idx = output.content.length - 1;
@@ -701,8 +772,27 @@ function streamCursorCli(
         const idx = output.content.length - 1;
         const textBlock = output.content[idx] as TextContent;
         textBlock.text += delta;
-        accumulatedText += delta;
+        currentBlockText += delta;
+        hasOutput = true;
         stream.push({ type: "text_delta", contentIndex: idx, delta, partial: output });
+      };
+
+      const appendThinking = (delta: string) => {
+        if (!delta) return;
+        if (firstTokenTime === undefined) firstTokenTime = Date.now();
+        closeTextBlock();
+        if (!thinkingBlockOpen) {
+          output.content.push({ type: "thinking", thinking: "" });
+          const idx = output.content.length - 1;
+          stream.push({ type: "thinking_start", contentIndex: idx, partial: output });
+          thinkingBlockOpen = true;
+        }
+        const idx = output.content.length - 1;
+        const thinkingBlock = output.content[idx] as ThinkingContent;
+        thinkingBlock.thinking += delta;
+        currentBlockText += delta;
+        hasOutput = true;
+        stream.push({ type: "thinking_delta", contentIndex: idx, delta, partial: output });
       };
 
       const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
@@ -716,17 +806,30 @@ function streamCursorCli(
           if (!isNewAssistantDelta(ae)) return;
           for (const block of ae.message.content) {
             if (block.type !== "text") continue;
-            appendText(block.text);
+            const delta = assistantTextDelta(segmentText, block.text);
+            if (!delta) continue;
+            segmentText += delta;
+            appendText(delta);
           }
           return;
         }
 
         if (event.type === "tool_call") {
           const tce = event as CursorToolCallEvent;
-          if (tce.subtype !== "started") return;
-          const described = describeToolCall(tce);
-          if (!described) return;
-          appendText(`\n⏳ [${described.name}] ${described.argsSnippet}\n`);
+          const cliKey = Object.keys(tce.tool_call)[0];
+          if (!cliKey) return;
+          const payload = tce.tool_call[cliKey];
+          if (tce.subtype === "started") {
+            segmentText = "";
+            closeThinkingBlock();
+            appendThinking(formatToolActivity(cliKey, payload));
+            return;
+          }
+          if (tce.subtype === "completed") {
+            const err = payload.result?.error?.message ?? payload.result?.rejected?.reason;
+            if (err) appendThinking(`\n${err}`);
+            closeThinkingBlock();
+          }
         }
       });
 
@@ -734,16 +837,7 @@ function streamCursorCli(
         child.on("close", (code) => {
           options?.signal?.removeEventListener("abort", onAbort);
 
-          if (textBlockOpen) {
-            const idx = output.content.length - 1;
-            stream.push({
-              type: "text_end",
-              contentIndex: idx,
-              content: accumulatedText,
-              partial: output,
-            });
-            textBlockOpen = false;
-          }
+          closeOpenBlock();
 
           if (options?.signal?.aborted) {
             output.stopReason = "aborted";
@@ -754,7 +848,7 @@ function streamCursorCli(
             return;
           }
 
-          if (code !== 0 && !accumulatedText) {
+          if (code !== 0 && !hasOutput) {
             const stderr = stderrChunks.join("").trim();
             output.stopReason = "error";
             output.errorMessage = stderr || `Cursor CLI exited with code ${code}`;

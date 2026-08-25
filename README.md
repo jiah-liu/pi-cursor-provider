@@ -244,7 +244,7 @@ agent --print --output-format stream-json --stream-partial-output \
   --model <id> --trust --workspace <cwd> --approve-mcps --force
 ```
 
-The prompt is written to **stdin** (not argv) so long sessions do not hit Linux `MAX_ARG_STRLEN` / `E2BIG`. The CLI's NDJSON stdout is read line-by-line; streaming `assistant` deltas are mapped to Pi stream events (`text_start`, `text_delta`, `text_end`, `done`). Duplicate buffered flushes (`model_call_id` / final flush without `timestamp_ms`) are skipped.
+The prompt is written to **stdin** (not argv) so long sessions do not hit Linux `MAX_ARG_STRLEN` / `E2BIG`. The CLI's NDJSON stdout is read line-by-line; streaming `assistant` deltas are mapped to Pi `text_*` events, and `tool_call` events become `thinking_*` traces. Duplicate buffered flushes (`model_call_id` / final flush without `timestamp_ms`) are skipped; growing text snapshots are converted to suffixes.
 
 - **Multi-turn context**: The full message history is serialised as a prefixed transcript (`[User] / [Assistant] / [Tool result]`) and sent as a single prompt. Cursor manages its own internal conversation from that point.
 - **Edits in print mode**: `--force` is passed so the CLI applies writes instead of only proposing them. Set `CURSOR_AGENT_FORCE=0` to opt out.
@@ -255,9 +255,9 @@ The prompt is written to **stdin** (not argv) so long sessions do not hit Linux 
 
 ## Tool calls
 
-When the Cursor CLI uses tools (Read, Write, Shell, Grep, Ls, Glob, etc.) during a turn, the extension displays those calls inline with the assistant text.
+When the Cursor CLI uses tools (Read, Write, Shell, Grep, Ls, Glob, etc.) during a turn, the extension shows them as **Pi thinking traces** between assistant paragraphs — not as `⏳` lines mixed into the answer text.
 
-The **Cursor CLI executes all tools** itself — Pi only observes and displays them. Tool arguments and results originate in the Cursor agent's execution environment, not in Pi's tool system.
+The **Cursor CLI executes all tools** itself. They are not emitted as Pi `toolCall` blocks, because Pi would otherwise try to run them again. Hide thinking in Pi if you only want the final prose.
 
 Supported Cursor CLI tools that appear in Pi's output:
 

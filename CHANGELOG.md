@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Default print invocation includes `--force`. Set `CURSOR_AGENT_FORCE=0` to opt out.
 - Published as `@jiah-liu/pi-cursor-provider` (fork of `@netandreus/pi-cursor-provider`).
+- **Display**: Cursor tool calls render as Pi thinking traces (not inline `⏳` lines in the answer). Assistant text is split around tools. Snapshot assistant events are de-duplicated into deltas.
 
 ## [0.1.2]
 
