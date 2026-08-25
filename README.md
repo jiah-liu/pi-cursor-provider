@@ -14,6 +14,8 @@ A [Pi Coding Agent](https://github.com/badlogic/pi-mono) custom provider that ro
 
 No separate API keys are needed for the models themselves. Authentication is handled by the Cursor CLI using your existing Cursor account.
 
+Published as [`@jiah-liu/pi-cursor-provider`](https://www.npmjs.com/package/@jiah-liu/pi-cursor-provider), a fork of [`@netandreus/pi-cursor-provider`](https://github.com/netandreus/pi-cursor-provider).
+
 ![Pi with Cursor Agent — Auto model in Cursor IDE](screenshot.png)
 
 ---
@@ -64,13 +66,13 @@ No separate API keys are needed for the models themselves. Authentication is han
 ### Option A — Install from npm (recommended)
 
 ```bash
-pi install npm:@netandreus/pi-cursor-provider
+pi install npm:@jiah-liu/pi-cursor-provider
 ```
 
 Or for project-local install:
 
 ```bash
-pi install npm:@netandreus/pi-cursor-provider -l
+pi install npm:@jiah-liu/pi-cursor-provider -l
 ```
 
 ### Option B — Install from source
@@ -78,7 +80,7 @@ pi install npm:@netandreus/pi-cursor-provider -l
 From the repository root:
 
 ```bash
-git clone https://github.com/netandreus/pi-cursor-provider.git
+git clone https://github.com/jiah-liu/pi-cursor-provider.git
 cd pi-cursor-provider
 pi install .
 ```
@@ -86,14 +88,14 @@ pi install .
 ### Option C — Try without installing
 
 ```bash
-pi -e npm:@netandreus/pi-cursor-provider
+pi -e npm:@jiah-liu/pi-cursor-provider
 ```
 
 ## Uninstall
 
 ### Option A — Installed from npm (recommended)
 ```bash
-pi remove npm:@netandreus/pi-cursor-provider
+pi remove npm:@jiah-liu/pi-cursor-provider
 ```
 
 ### Option B — Installed from source
@@ -161,14 +163,14 @@ After loading the extension, select a Cursor model with the `/model` command:
 You can also specify the model on the command line:
 
 ```bash
-pi -e npm:@netandreus/pi-cursor-provider --provider cursor --model auto
+pi -e npm:@jiah-liu/pi-cursor-provider --provider cursor --model auto
 ```
 
 Or pipe a prompt non-interactively:
 
 ```bash
 echo "Explain the main function in this file" | \
-  pi -e npm:@netandreus/pi-cursor-provider --provider cursor --model claude-opus-4-8
+  pi -e npm:@jiah-liu/pi-cursor-provider --provider cursor --model claude-opus-4-8
 ```
 
 ---
@@ -228,7 +230,7 @@ Example:
 
 ```bash
 export CURSOR_AGENT_PATH=$HOME/.local/bin/agent
-pi -e npm:@netandreus/pi-cursor-provider --provider cursor --model auto
+pi -e npm:@jiah-liu/pi-cursor-provider --provider cursor --model auto
 ```
 
 ---

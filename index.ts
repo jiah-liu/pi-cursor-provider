@@ -8,7 +8,7 @@
  * CURSOR_API_KEY environment variable) before using this provider.
  *
  * Usage:
- *   pi install npm:@netandreus/pi-cursor-provider
+ *   pi install npm:@jiah-liu/pi-cursor-provider
  *   # Then /model cursor/<model-id>, e.g. /model cursor/claude-opus-4-8
  *
  * Configuration env vars:

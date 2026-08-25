@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Default print invocation includes `--force`. Set `CURSOR_AGENT_FORCE=0` to opt out.
+- Published as `@jiah-liu/pi-cursor-provider` (fork of `@netandreus/pi-cursor-provider`).
 
 ## [0.1.2]
 
