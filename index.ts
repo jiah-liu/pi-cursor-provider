@@ -14,10 +14,12 @@
  * Configuration env vars:
  *   CURSOR_AGENT_PATH   Path to the Cursor Agent CLI binary (default: "agent")
  *   CURSOR_API_KEY      API key for Cursor (used by the agent subprocess if set)
- *   CURSOR_AGENT_FORCE  Set to "0" to disable --force (Run Everything) in print mode
+ *   CURSOR_AGENT_FORCE  Set to "1" to allow --force (writes in print mode)
+ *   CURSOR_AGENT_TRUST       Set to "1" to allow --trust and --approve-mcps
+ *   CURSOR_AGENT_TIMEOUT_MS  Request timeout in ms (default: 600000)
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -79,39 +81,13 @@ const CURSOR_CLI_PLACEHOLDER_API_KEY = "cursor-cli";
  * v2026.08.11-e8db854).
  */
 const STATIC_MODELS: CursorModelDef[] = [
-  { id: "auto", name: "Auto", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  { id: "composer-2.5", name: "Composer 2.5", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  { id: "claude-opus-4-8-medium", name: "Claude Opus 4.8 1M Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "claude-opus-5-medium", name: "Claude Opus 5 1M Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "claude-sonnet-5-medium", name: "Claude Sonnet 5 1M Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "claude-fable-5-medium", name: "Claude Fable 5 1M Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "claude-opus-4-7-medium", name: "Claude Opus 4.7 1M Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "claude-4.6-opus-high", name: "Claude Opus 4.6 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "claude-4.6-sonnet-medium", name: "Claude Sonnet 4.6 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "claude-4.5-opus-high", name: "Claude Opus 4.5", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "claude-4.5-sonnet", name: "Claude Sonnet 4.5", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "claude-4-sonnet", name: "Claude Sonnet 4", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.6-sol-medium", name: "GPT-5.6 Sol 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "gpt-5.6-luna-medium", name: "GPT-5.6 Luna 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "gpt-5.6-terra-medium", name: "GPT-5.6 Terra 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "gpt-5.5-medium", name: "GPT-5.5 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "gpt-5.4-medium", name: "GPT-5.4 1M", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "gpt-5.4-mini-medium", name: "GPT-5.4 Mini", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.4-nano-medium", name: "GPT-5.4 Nano", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.3-codex", name: "Codex 5.3", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.2", name: "GPT-5.2", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5.1", name: "GPT-5.1", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gpt-5-mini", name: "GPT-5 Mini", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
-  { id: "cursor-grok-4.6-medium", name: "Cursor Grok 4.6 Medium", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "cursor-grok-4.5-medium", name: "Cursor Grok 4.5 Medium", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "gemini-3.7-flash-medium", name: "Gemini 3.7 Flash Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "gemini-3.6-flash-medium", name: "Gemini 3.6 Flash Medium", reasoning: true, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash", reasoning: false, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro", reasoning: false, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "gemini-3-flash", name: "Gemini 3 Flash", reasoning: false, contextWindow: 1000000, maxTokens: 65536 },
-  { id: "glm-5.2-high", name: "GLM 5.2", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "kimi-k3-high", name: "Kimi K3 High", reasoning: true, contextWindow: 200000, maxTokens: 32768 },
-  { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", reasoning: false, contextWindow: 200000, maxTokens: 32768 },
+  {
+    id: "auto",
+    name: "Auto",
+    reasoning: false,
+    contextWindow: 200000,
+    maxTokens: 32768,
+  },
 ];
 
 /** Old Pi / CLI ids → current family id. */
@@ -228,9 +204,15 @@ function pickVariant(family: string, reasoning?: string): string {
     }
     if (wantEffort) {
       if (parsed.effort === wantEffort) score += 40;
-      else if (wantEffort === "xhigh" && (parsed.effort === "extra-high" || parsed.effort === "max"))
+      else if (
+        wantEffort === "xhigh" &&
+        (parsed.effort === "extra-high" || parsed.effort === "max")
+      )
         score += 30;
-      else if (wantEffort === "low" && (parsed.effort === "none" || parsed.effort === "minimal"))
+      else if (
+        wantEffort === "low" &&
+        (parsed.effort === "none" || parsed.effort === "minimal")
+      )
         score += 20;
       else if (parsed.effort == null && wantEffort === "medium") score += 25;
     } else if (def.id === family || parsed.effort == null) {
@@ -259,7 +241,10 @@ function inferReasoning(id: string): boolean {
   return /(-thinking|-high|-xhigh|-extra-high|-max-high|-max)$/.test(id);
 }
 
-function inferAttrs(id: string, name: string): Pick<CursorModelDef, "reasoning" | "contextWindow" | "maxTokens"> {
+function inferAttrs(
+  id: string,
+  _name: string,
+): Pick<CursorModelDef, "reasoning" | "contextWindow" | "maxTokens"> {
   const family = parseCursorModelId(id).family;
   const known = STATIC_MODELS_MAP.get(id) ?? STATIC_MODELS_MAP.get(family);
   if (known) {
@@ -269,11 +254,11 @@ function inferAttrs(id: string, name: string): Pick<CursorModelDef, "reasoning" 
       maxTokens: known.maxTokens,
     };
   }
-  const oneM = /1M|\b1m\b/i.test(name) || /^gemini/i.test(id);
+  // The CLI does not expose limits; keep unknown models conservative.
   return {
     reasoning: inferReasoning(id),
-    contextWindow: oneM ? 1_000_000 : 200_000,
-    maxTokens: oneM ? 65_536 : 32_768,
+    contextWindow: 200_000,
+    maxTokens: 32_768,
   };
 }
 
@@ -300,6 +285,29 @@ function indexModelDefs(defs: CursorModelDef[]): void {
 // ---------------------------------------------------------------------------
 
 const DISCOVERY_TIMEOUT_MS = 15_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
+const DEFAULT_MAX_PROMPT_CHARS = 4_000_000;
+const MAX_STDERR_CHARS = 100_000;
+
+function positiveEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 1_000 ? value : fallback;
+}
+
+function requestTimeoutMs(): number {
+  return positiveEnv("CURSOR_AGENT_TIMEOUT_MS", DEFAULT_REQUEST_TIMEOUT_MS);
+}
+
+function maxPromptChars(): number {
+  return positiveEnv("CURSOR_AGENT_MAX_PROMPT_CHARS", DEFAULT_MAX_PROMPT_CHARS);
+}
+
+function terminate(child: ChildProcess): void {
+  child.kill("SIGTERM");
+  const kill = setTimeout(() => child.kill("SIGKILL"), 5_000);
+  kill.unref();
+  child.once("close", () => clearTimeout(kill));
+}
 
 function parseAgentModelsOutput(output: string): CursorModelDef[] {
   const results: CursorModelDef[] = [];
@@ -308,7 +316,12 @@ function parseAgentModelsOutput(output: string): CursorModelDef[] {
 
   for (const line of output.split("\n")) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("Available") || trimmed.startsWith("Tip:")) continue;
+    if (
+      !trimmed ||
+      trimmed.startsWith("Available") ||
+      trimmed.startsWith("Tip:")
+    )
+      continue;
     const match = lineRe.exec(trimmed);
     if (!match) continue;
 
@@ -329,9 +342,6 @@ function parseAgentModelsOutput(output: string): CursorModelDef[] {
 function runAgentModels(agentPath: string): Promise<CursorModelDef[]> {
   return new Promise((resolve, reject) => {
     const args = ["models"];
-    if (process.env["CURSOR_API_KEY"]) {
-      args.unshift("--api-key", process.env["CURSOR_API_KEY"]);
-    }
 
     let stdout = "";
     let stderr = "";
@@ -341,8 +351,10 @@ function runAgentModels(agentPath: string): Promise<CursorModelDef[]> {
     });
 
     const timeout = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`agent models timed out after ${DISCOVERY_TIMEOUT_MS}ms`));
+      terminate(child);
+      reject(
+        new Error(`agent models timed out after ${DISCOVERY_TIMEOUT_MS}ms`),
+      );
     }, DISCOVERY_TIMEOUT_MS);
 
     child.stdout?.on("data", (chunk: Buffer) => {
@@ -360,7 +372,9 @@ function runAgentModels(agentPath: string): Promise<CursorModelDef[]> {
     child.on("close", (code) => {
       clearTimeout(timeout);
       if (code !== 0) {
-        reject(new Error(`agent models exited with code ${code}: ${stderr.trim()}`));
+        reject(
+          new Error(`agent models exited with code ${code}: ${stderr.trim()}`),
+        );
         return;
       }
       const models = parseAgentModelsOutput(stdout);
@@ -403,7 +417,11 @@ interface ImageBlock {
   path?: string;
 }
 
-function spawnAgentPrint(agentPath: string, args: string[], prompt: string): ChildProcess {
+function spawnAgentPrint(
+  agentPath: string,
+  args: string[],
+  prompt: string,
+): ChildProcess {
   const child = spawn(agentPath, args, {
     stdio: ["pipe", "pipe", "pipe"],
     env: process.env,
@@ -434,7 +452,10 @@ async function cleanupPromptTempFiles(state: PromptTempFiles): Promise<void> {
   await rm(dir, { recursive: true, force: true });
 }
 
-async function imageBlockToPromptText(block: ImageBlock, state: PromptTempFiles): Promise<string> {
+async function imageBlockToPromptText(
+  block: ImageBlock,
+  state: PromptTempFiles,
+): Promise<string> {
   if (block.path) return block.path;
   const data = block.data;
   if (!data) {
@@ -442,8 +463,15 @@ async function imageBlockToPromptText(block: ImageBlock, state: PromptTempFiles)
   }
   const dir = await ensurePromptTempDir(state);
   state.imageCount += 1;
-  const path = join(dir, `image-${state.imageCount}.${getImageExtension(block.mimeType)}`);
-  await writeFile(path, Buffer.from(stripDataUrlPrefix(data), "base64"));
+  const path = join(
+    dir,
+    `image-${state.imageCount}.${getImageExtension(block.mimeType)}`,
+  );
+  const image = Buffer.from(stripDataUrlPrefix(data), "base64");
+  if (image.length > maxPromptChars()) {
+    throw new Error(`Image exceeds the ${maxPromptChars()} byte prompt limit`);
+  }
+  await writeFile(path, image);
   return path;
 }
 
@@ -466,7 +494,10 @@ async function serializeContentBlocks(
   return parts.join("\n");
 }
 
-async function serializeContext(context: Context, state: PromptTempFiles): Promise<string> {
+async function serializeContext(
+  context: Context,
+  state: PromptTempFiles,
+): Promise<string> {
   const lines: string[] = [];
 
   if (context.systemPrompt) {
@@ -496,7 +527,11 @@ async function serializeContext(context: Context, state: PromptTempFiles): Promi
     }
   }
 
-  return lines.join("\n\n");
+  const prompt = lines.join("\n\n");
+  if (prompt.length > maxPromptChars()) {
+    throw new Error(`Prompt exceeds the ${maxPromptChars()} character limit`);
+  }
+  return prompt;
 }
 
 // ---------------------------------------------------------------------------
@@ -505,7 +540,10 @@ async function serializeContext(context: Context, state: PromptTempFiles): Promi
 
 interface CursorAssistantEvent {
   type: "assistant";
-  message: { role: "assistant"; content: Array<{ type: "text"; text: string }> };
+  message: {
+    role: "assistant";
+    content: Array<{ type: "text"; text: string }>;
+  };
   session_id: string;
   timestamp_ms?: number;
   model_call_id?: string;
@@ -557,7 +595,8 @@ function parseLine(line: string): CursorStreamEvent | null {
  */
 function isNewAssistantDelta(event: CursorAssistantEvent): boolean {
   const hasTs = typeof event.timestamp_ms === "number";
-  const hasMc = typeof event.model_call_id === "string" && event.model_call_id.length > 0;
+  const hasMc =
+    typeof event.model_call_id === "string" && event.model_call_id.length > 0;
   if (hasTs || hasMc) return hasTs && !hasMc;
   return true;
 }
@@ -599,7 +638,10 @@ function briefArg(value: unknown, max = 80): string {
 }
 
 /** One-line thinking trace for a Cursor CLI tool call. Not a Pi-executable toolCall. */
-function formatToolActivity(cliKey: string, payload: CursorToolCallPayload): string {
+function formatToolActivity(
+  cliKey: string,
+  payload: CursorToolCallPayload,
+): string {
   if (cliKey === "function") {
     const name = payload.name ?? "Function";
     const args = payload.arguments ?? briefArg(payload.args);
@@ -673,14 +715,17 @@ function streamCursorCli(
 
     const setTiming = () => {
       output.duration = Date.now() - startTime;
-      output.ttft = firstTokenTime != null ? firstTokenTime - startTime : undefined;
+      output.ttft =
+        firstTokenTime != null ? firstTokenTime - startTime : undefined;
     };
 
     const promptTempFiles: PromptTempFiles = { dir: null, imageCount: 0 };
 
     try {
       const agentPath =
-        process.env["CURSOR_AGENT_PATH"] ?? process.env["AGENT_PATH"] ?? "agent";
+        process.env["CURSOR_AGENT_PATH"] ??
+        process.env["AGENT_PATH"] ??
+        "agent";
 
       const workspacePath = process.cwd();
       const prompt = await serializeContext(context, promptTempFiles);
@@ -694,39 +739,41 @@ function streamCursorCli(
         "--stream-partial-output",
         "--model",
         cliModelId,
-        "--trust",
         "--workspace",
         workspacePath,
-        "--approve-mcps",
       ];
 
-      if (process.env["CURSOR_AGENT_FORCE"] !== "0") {
-        args.push("--force");
+      if (process.env["CURSOR_AGENT_TRUST"] === "1") {
+        args.push("--trust", "--approve-mcps");
       }
-
-      if (process.env["CURSOR_API_KEY"]) {
-        args.unshift("--api-key", process.env["CURSOR_API_KEY"]);
+      if (process.env["CURSOR_AGENT_FORCE"] === "1") {
+        args.push("--force");
       }
 
       stream.push({ type: "start", partial: output });
 
       const child = spawnAgentPrint(agentPath, args, prompt);
+      const timeoutMs = requestTimeoutMs();
+      let timedOut = false;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        terminate(child);
+      }, timeoutMs);
 
       const onAbort = () => {
-        child.kill("SIGTERM");
+        terminate(child);
       };
       options?.signal?.addEventListener("abort", onAbort, { once: true });
 
-      const stderrChunks: string[] = [];
+      let stderr = "";
       child.stderr?.on("data", (chunk: Buffer) => {
-        stderrChunks.push(chunk.toString());
+        stderr = `${stderr}${chunk}`.slice(-MAX_STDERR_CHARS);
       });
 
       let textBlockOpen = false;
       let thinkingBlockOpen = false;
       let currentBlockText = "";
       let segmentText = "";
-      let hasOutput = false;
 
       const closeTextBlock = () => {
         if (!textBlockOpen) return;
@@ -766,15 +813,23 @@ function streamCursorCli(
         if (!textBlockOpen) {
           output.content.push({ type: "text", text: "" });
           const idx = output.content.length - 1;
-          stream.push({ type: "text_start", contentIndex: idx, partial: output });
+          stream.push({
+            type: "text_start",
+            contentIndex: idx,
+            partial: output,
+          });
           textBlockOpen = true;
         }
         const idx = output.content.length - 1;
         const textBlock = output.content[idx] as TextContent;
         textBlock.text += delta;
         currentBlockText += delta;
-        hasOutput = true;
-        stream.push({ type: "text_delta", contentIndex: idx, delta, partial: output });
+        stream.push({
+          type: "text_delta",
+          contentIndex: idx,
+          delta,
+          partial: output,
+        });
       };
 
       const appendThinking = (delta: string) => {
@@ -784,15 +839,23 @@ function streamCursorCli(
         if (!thinkingBlockOpen) {
           output.content.push({ type: "thinking", thinking: "" });
           const idx = output.content.length - 1;
-          stream.push({ type: "thinking_start", contentIndex: idx, partial: output });
+          stream.push({
+            type: "thinking_start",
+            contentIndex: idx,
+            partial: output,
+          });
           thinkingBlockOpen = true;
         }
         const idx = output.content.length - 1;
         const thinkingBlock = output.content[idx] as ThinkingContent;
         thinkingBlock.thinking += delta;
         currentBlockText += delta;
-        hasOutput = true;
-        stream.push({ type: "thinking_delta", contentIndex: idx, delta, partial: output });
+        stream.push({
+          type: "thinking_delta",
+          contentIndex: idx,
+          delta,
+          partial: output,
+        });
       };
 
       const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
@@ -826,7 +889,9 @@ function streamCursorCli(
             return;
           }
           if (tce.subtype === "completed") {
-            const err = payload.result?.error?.message ?? payload.result?.rejected?.reason;
+            const err =
+              payload.result?.error?.message ??
+              payload.result?.rejected?.reason;
             if (err) appendThinking(`\n${err}`);
             closeThinkingBlock();
           }
@@ -835,6 +900,7 @@ function streamCursorCli(
 
       await new Promise<void>((resolve) => {
         child.on("close", (code) => {
+          clearTimeout(timeout);
           options?.signal?.removeEventListener("abort", onAbort);
 
           closeOpenBlock();
@@ -848,10 +914,11 @@ function streamCursorCli(
             return;
           }
 
-          if (code !== 0 && !hasOutput) {
-            const stderr = stderrChunks.join("").trim();
+          if (code !== 0 || timedOut) {
             output.stopReason = "error";
-            output.errorMessage = stderr || `Cursor CLI exited with code ${code}`;
+            output.errorMessage = timedOut
+              ? `Cursor CLI timed out after ${timeoutMs}ms`
+              : stderr.trim() || `Cursor CLI exited with code ${code}`;
             setTiming();
             stream.push({ type: "error", reason: "error", error: output });
             stream.end();
@@ -866,6 +933,7 @@ function streamCursorCli(
         });
 
         child.on("error", (err) => {
+          clearTimeout(timeout);
           options?.signal?.removeEventListener("abort", onAbort);
           output.stopReason = "error";
           output.errorMessage = err.message;
@@ -877,7 +945,8 @@ function streamCursorCli(
       });
     } catch (error) {
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : String(error);
+      output.errorMessage =
+        error instanceof Error ? error.message : String(error);
       setTiming();
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
@@ -941,7 +1010,12 @@ function toProviderModels(defs: CursorModelDef[]) {
     name: string;
     reasoning: boolean;
     input: ("text" | "image")[];
-    cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+    cost: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+    };
     contextWindow: number;
     maxTokens: number;
   }> = [];
@@ -992,7 +1066,9 @@ export default async function (pi: ExtensionAPI) {
     oauth: {
       name: "Cursor CLI",
       async login() {
-        throw new Error("Authenticate with Cursor using `agent login` or /cursor-login");
+        throw new Error(
+          "Authenticate with Cursor using `agent login` or /cursor-login",
+        );
       },
       async refreshToken(credentials) {
         return { ...credentials, expires: Number.MAX_SAFE_INTEGER };

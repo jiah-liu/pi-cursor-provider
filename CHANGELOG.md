@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0]
+
+### Changed
+
+- **Safety**: `--force`, `--trust`, and `--approve-mcps` are now opt-in through `CURSOR_AGENT_FORCE=1` and `CURSOR_AGENT_TRUST=1`.
+- **Model fallback**: when discovery fails, only `auto` is registered; unknown models use conservative context and output limits.
+- **API key handling**: `CURSOR_API_KEY` is inherited by the CLI instead of appearing in process arguments.
+
+### Added
+
+- **Request timeout**: `CURSOR_AGENT_TIMEOUT_MS` limits a CLI request (default: 10 minutes).
+- **Regression tests and CI**: Node 20-compatible tests cover safe CLI flags, failures after partial output, and timeouts.
+
 ## [0.2.1]
 
 ### Changed

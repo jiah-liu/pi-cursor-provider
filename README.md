@@ -121,7 +121,7 @@ agent login
 export CURSOR_API_KEY=your_cursor_api_key
 ```
 
-If `CURSOR_API_KEY` is set it is forwarded to every `agent` subprocess via `--api-key` automatically.
+If `CURSOR_API_KEY` is set it is inherited by every `agent` subprocess without exposing it in command-line arguments.
 
 ### Auth commands inside Pi
 
@@ -181,7 +181,7 @@ At startup the extension runs `agent models` to discover the **account-specific*
 
 Cursor CLI now exposes many parameterized variants (effort, thinking, fast). The provider **groups them into families** so `/model` stays usable — for example `claude-opus-4-8-thinking-high-fast` is registered as `cursor/claude-opus-4-8`. Pi's reasoning level is mapped back to the matching CLI variant.
 
-If discovery fails (e.g. the CLI is not installed, not authenticated, or times out), a built-in static fallback list is used automatically — no crash, no user action needed.
+If discovery fails (e.g. the CLI is not installed, not authenticated, or times out), only the built-in `auto` fallback is registered — no crash, no stale model list.
 
 To see the models currently available to your account:
 
@@ -189,7 +189,7 @@ To see the models currently available to your account:
 agent models
 ```
 
-Models with thinking or multiple effort variants are marked as reasoning models in Pi. Context windows of 1M are taken from the CLI display name when present; otherwise 200k / 32k defaults apply.
+Models with thinking or multiple effort variants are marked as reasoning models in Pi. The CLI does not expose token limits, so unknown models use conservative 200k / 32k defaults.
 
 Old ids such as `claude-sonnet-4-6` or `sonnet-4.6` still resolve to the current family.
 
@@ -223,8 +223,10 @@ Subset of families. Use the **Family ID** with `/model cursor/<id>`. The live li
 |---|---|---|
 | `CURSOR_AGENT_PATH` | `agent` | Full path to the Cursor Agent CLI binary. |
 | `AGENT_PATH` | `agent` | Fallback if `CURSOR_AGENT_PATH` is not set. |
-| `CURSOR_API_KEY` | *(none)* | Cursor API key; passed to CLI via `--api-key` if set. |
-| `CURSOR_AGENT_FORCE` | *(enabled)* | Set to `0` to omit `--force` (print mode will propose edits instead of applying them). |
+| `CURSOR_API_KEY` | *(none)* | Cursor API key inherited by the CLI process. |
+| `CURSOR_AGENT_FORCE` | *(disabled)* | Set to `1` to pass `--force`, allowing writes in print mode. |
+| `CURSOR_AGENT_TRUST` | *(disabled)* | Set to `1` to pass `--trust --approve-mcps`. |
+| `CURSOR_AGENT_TIMEOUT_MS` | `600000` | Maximum duration of one CLI request; values below 1000 are ignored. |
 
 Example:
 
@@ -241,13 +243,15 @@ Each Pi turn spawns a Cursor Agent CLI subprocess:
 
 ```
 agent --print --output-format stream-json --stream-partial-output \
-  --model <id> --trust --workspace <cwd> --approve-mcps --force
+  --model <id> --workspace <cwd>
+# CURSOR_AGENT_FORCE=1 adds --force; CURSOR_AGENT_TRUST=1 adds --trust --approve-mcps
+# CURSOR_AGENT_TIMEOUT_MS sets a per-request timeout (default: 600000)
 ```
 
 The prompt is written to **stdin** (not argv) so long sessions do not hit Linux `MAX_ARG_STRLEN` / `E2BIG`. The CLI's NDJSON stdout is read line-by-line; streaming `assistant` deltas are mapped to Pi `text_*` events, and `tool_call` events become `thinking_*` traces. Duplicate buffered flushes (`model_call_id` / final flush without `timestamp_ms`) are skipped; growing text snapshots are converted to suffixes.
 
 - **Multi-turn context**: The full message history is serialised as a prefixed transcript (`[User] / [Assistant] / [Tool result]`) and sent as a single prompt. Cursor manages its own internal conversation from that point.
-- **Edits in print mode**: `--force` is passed so the CLI applies writes instead of only proposing them. Set `CURSOR_AGENT_FORCE=0` to opt out.
+- **Safety defaults**: writes and MCP auto-approval are disabled. Set `CURSOR_AGENT_FORCE=1` to allow writes, and `CURSOR_AGENT_TRUST=1` to trust the workspace and approve MCP tools.
 - **Token usage**: Cursor CLI does not expose token counts; usage is reported as 0.
 - **Cost tracking**: Models are registered with `cost: 0` since billing goes through your Cursor subscription.
 
@@ -386,7 +390,7 @@ Models are registered with `input: ["text", "image"]`. Temp files are deleted wh
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `spawn agent ENOENT` | `agent` binary not on PATH | Set `CURSOR_AGENT_PATH=/path/to/agent` |
-| Empty response / hangs | Not logged in to Cursor, or print mode waiting for approvals | Run `agent login` or set `CURSOR_API_KEY`. `--force` is on by default. |
+| Empty response / hangs | Not logged in to Cursor, or print mode waiting for approvals | Run `agent login` or set `CURSOR_API_KEY`; enable only the required `CURSOR_AGENT_FORCE=1` / `CURSOR_AGENT_TRUST=1` flags. Increase `CURSOR_AGENT_TIMEOUT_MS` only for known long-running work. |
 | `No API key found for cursor` | Pi 0.77+ used to require `CURSOR_API_KEY` | Upgrade this provider to 0.2.0+; `agent login` is enough. |
 | `spawn E2BIG` | Old provider put the prompt in argv | Upgrade this provider; prompts now go on stdin. |
 | `No models available` | Cursor CLI cannot reach the API | Check internet connection and `agent status` |

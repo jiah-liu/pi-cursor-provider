@@ -1,6 +1,6 @@
 {
   "name": "@jiah-liu/pi-cursor-provider",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "author": {
     "name": "jiah-liu",
     "email": "liujh030@gmail.com",
@@ -54,9 +54,10 @@
     "@mariozechner/pi-coding-agent": "*"
   },
   "scripts": {
-    "lint": "npx biome check",
-    "format": "npx biome check --write",
-    "typecheck": "npx tsc --noEmit"
+    "lint": "biome lint",
+    "format": "biome check --write",
+    "test": "node -e \"require('fs').rmSync('.test-dist', { recursive: true, force: true })\" && tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.2",
