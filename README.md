@@ -1,5 +1,7 @@
 <div align="center">
   <img src="logo.png" alt="Pi Cursor Provider" width="400" />
+
+  **English** | [简体中文](README.zh-CN.md)
 </div>
 
 # pi-cursor-provider
@@ -37,6 +39,7 @@ Published as [`@jiah-liu/pi-cursor-provider`](https://www.npmjs.com/package/@jia
     - [Verify auth](#verify-auth)
   - [Usage](#usage)
   - [Available models](#available-models)
+    - [Model synchronization](#model-synchronization)
     - [Model reference table](#model-reference-table)
   - [Configuration](#configuration)
   - [How it works](#how-it-works)
@@ -181,6 +184,10 @@ echo "Explain the main function in this file" | \
 ## Available models
 
 At startup the extension runs `agent models` to discover the **account-specific** model list from your Cursor subscription. The list is cached for the lifetime of the Pi session.
+
+### Model synchronization
+
+New Cursor models are picked up automatically when Pi starts. In an existing interactive session, run `/reload` to refresh them. This requires the installed Cursor Agent CLI and your account to expose the model through `agent models`; updating this npm package is normally unnecessary.
 
 Cursor CLI now exposes many parameterized variants (effort, thinking, fast). The provider **groups them into families** so `/model` stays usable — for example `claude-opus-4-8-thinking-high-fast` is registered as `cursor/claude-opus-4-8`. Pi's reasoning level is mapped back to the matching CLI variant.
 
@@ -393,6 +400,7 @@ Models are registered with `input: ["text", "image"]`. Temp files are deleted wh
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `spawn agent ENOENT` | `agent` binary not on PATH | Set `CURSOR_AGENT_PATH=/path/to/agent` |
+| `Workspace Trust Required` | Cursor CLI has not trusted the current directory | Choose an option in the automatic prompt or run `/cursor-permissions` |
 | Empty response / hangs | Not logged in to Cursor, or print mode waiting for approvals | Run `agent login` or set `CURSOR_API_KEY`; enable only the required `CURSOR_AGENT_FORCE=1` / `CURSOR_AGENT_TRUST=1` flags. Increase `CURSOR_AGENT_TIMEOUT_MS` only for known long-running work. |
 | `No API key found for cursor` | Pi 0.77+ used to require `CURSOR_API_KEY` | Upgrade this provider to 0.2.0+; `agent login` is enough. |
 | `spawn E2BIG` | Old provider put the prompt in argv | Upgrade this provider; prompts now go on stdin. |

@@ -38,6 +38,7 @@
   "files": [
     "index.ts",
     "README.md",
+    "README.zh-CN.md",
     "LICENSE",
     "logo.png",
     "pi-cursor-provider.jpg"
