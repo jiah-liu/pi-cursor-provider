@@ -36,7 +36,10 @@ import type {
   ThinkingContent,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
 // Model definitions
@@ -1049,6 +1052,31 @@ function toProviderModels(defs: CursorModelDef[]) {
 export default async function (pi: ExtensionAPI) {
   const agentPath =
     process.env["CURSOR_AGENT_PATH"] ?? process.env["AGENT_PATH"] ?? "agent";
+  let permissionsPrompted = false;
+
+  const promptPermissions = async (ctx: ExtensionContext) => {
+    if (!ctx.hasUI) return;
+    permissionsPrompted = true;
+    const choice = await ctx.ui.select(
+      `Cursor workspace permissions: ${ctx.cwd}`,
+      [
+        "Trust workspace (read-only)",
+        "Trust workspace and allow writes",
+        "Keep safe defaults",
+      ],
+    );
+    if (!choice) return;
+
+    delete process.env["CURSOR_AGENT_FORCE"];
+    if (choice === "Keep safe defaults") {
+      delete process.env["CURSOR_AGENT_TRUST"];
+    } else {
+      process.env["CURSOR_AGENT_TRUST"] = "1";
+      if (choice === "Trust workspace and allow writes")
+        process.env["CURSOR_AGENT_FORCE"] = "1";
+    }
+    ctx.ui.notify(`Cursor permissions updated for this Pi process.`, "info");
+  };
 
   let modelDefs: CursorModelDef[];
   try {
@@ -1080,6 +1108,29 @@ export default async function (pi: ExtensionAPI) {
     api: "cursor-cli" as Api,
     models: toProviderModels(modelDefs),
     streamSimple: streamCursorCli,
+  });
+
+  pi.on("session_start", async (_event, ctx) => {
+    if (
+      ctx.model?.provider === "cursor" &&
+      process.env["CURSOR_AGENT_TRUST"] !== "1" &&
+      !permissionsPrompted
+    )
+      await promptPermissions(ctx);
+  });
+
+  pi.on("model_select", async (event, ctx) => {
+    if (
+      event.model.provider === "cursor" &&
+      process.env["CURSOR_AGENT_TRUST"] !== "1" &&
+      !permissionsPrompted
+    )
+      await promptPermissions(ctx);
+  });
+
+  pi.registerCommand("cursor-permissions", {
+    description: "Configure Cursor workspace trust and write access",
+    handler: async (_args, ctx) => promptPermissions(ctx),
   });
 
   pi.registerCommand("cursor-login", {

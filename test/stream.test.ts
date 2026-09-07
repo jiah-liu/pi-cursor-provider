@@ -68,6 +68,7 @@ async function run(
       provider = config;
     },
     registerCommand: () => {},
+    on: () => {},
   } as unknown as ExtensionAPI);
   assert.ok(provider?.streamSimple);
   const stream = provider.streamSimple(

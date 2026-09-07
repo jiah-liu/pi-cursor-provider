@@ -132,6 +132,9 @@ After loading the extension you can manage auth without leaving Pi. These comman
 | `/cursor-login` | Log in to Cursor (runs `agent login`) |
 | `/cursor-status` | Show Cursor authentication status (runs `agent status`) |
 | `/cursor-logout` | Log out of Cursor (runs `agent logout`) |
+| `/cursor-permissions` | Choose workspace trust and write access for this Pi process |
+
+When a Cursor model is selected without `CURSOR_AGENT_TRUST=1`, interactive Pi prompts for workspace permissions before the first request. The choice updates the current Pi process only; use the environment variables below for a persistent default.
 
 ### Verify auth
 
@@ -224,8 +227,8 @@ Subset of families. Use the **Family ID** with `/model cursor/<id>`. The live li
 | `CURSOR_AGENT_PATH` | `agent` | Full path to the Cursor Agent CLI binary. |
 | `AGENT_PATH` | `agent` | Fallback if `CURSOR_AGENT_PATH` is not set. |
 | `CURSOR_API_KEY` | *(none)* | Cursor API key inherited by the CLI process. |
-| `CURSOR_AGENT_FORCE` | *(disabled)* | Set to `1` to pass `--force`, allowing writes in print mode. |
-| `CURSOR_AGENT_TRUST` | *(disabled)* | Set to `1` to pass `--trust --approve-mcps`. |
+| `CURSOR_AGENT_FORCE` | *(disabled)* | Set to `1` to pass `--force`, allowing writes in print mode. Can also be changed with `/cursor-permissions`. |
+| `CURSOR_AGENT_TRUST` | *(disabled)* | Set to `1` to pass `--trust --approve-mcps`. Interactive Pi prompts when needed; `/cursor-permissions` changes it again. |
 | `CURSOR_AGENT_TIMEOUT_MS` | `600000` | Maximum duration of one CLI request; values below 1000 are ignored. |
 
 Example:
