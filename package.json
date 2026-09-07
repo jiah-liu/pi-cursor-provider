@@ -38,13 +38,15 @@
   "files": [
     "index.ts",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "logo.png",
+    "pi-cursor-provider.jpg"
   ],
   "pi": {
     "extensions": [
       "./index.ts"
     ],
-    "image": "https://raw.githubusercontent.com/jiah-liu/pi-cursor-provider/master/screenshot.png"
+    "image": "https://raw.githubusercontent.com/jiah-liu/pi-cursor-provider/master/pi-cursor-provider.jpg"
   },
   "engines": {
     "node": ">=20"

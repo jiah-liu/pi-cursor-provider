@@ -16,7 +16,7 @@ No separate API keys are needed for the models themselves. Authentication is han
 
 Published as [`@jiah-liu/pi-cursor-provider`](https://www.npmjs.com/package/@jiah-liu/pi-cursor-provider), a fork of [`@netandreus/pi-cursor-provider`](https://github.com/netandreus/pi-cursor-provider).
 
-![Pi with Cursor Agent — Auto model in Cursor IDE](screenshot.png)
+![Pi with Cursor Agent — Auto model](pi-cursor-provider.jpg)
 
 ---
 
